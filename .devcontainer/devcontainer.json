@@ -1,0 +1,73 @@
+{
+    "name": "MICCAI 2025 Development",
+    "build": {
+        "dockerfile": "../Dockerfile",
+        "context": ".."
+    },
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "ms-python.python",
+                "ms-python.vscode-pylance",
+                "ms-azuretools.vscode-docker",
+                "GitHub.copilot",
+                "eamodio.gitlens",
+                "njpwerner.autodocstring",
+                "ms-toolsai.jupyter"
+            ],
+            "settings": {
+                "python.defaultInterpreterPath": "/opt/saturncloud/envs/saturn/bin/python",
+                "python.linting.enabled": true,
+                "python.linting.pylintEnabled": true,
+                "editor.formatOnSave": true,
+                "python.formatting.provider": "black",
+                "editor.rulers": [88],
+                "files.trimTrailingWhitespace": true,
+                "python.analysis.typeCheckingMode": "basic",
+                "python.testing.pytestEnabled": true
+            }
+        }
+    },
+
+    "runArgs": [
+        "--gpus", "all",
+        "--shm-size", "18gb"
+    ],
+
+    "mounts": [
+        {
+            "source": "${localWorkspaceFolder}",
+            "target": "/home/jovyan/work",
+            "type": "bind"
+        },
+        {
+            "source": "/home/petermcgor/Documents/Projects/nnUNet2",
+            "target": "/home/jovyan/nnunet_data",
+            "type": "bind",
+            "consistency": "cached"
+        },
+        {
+            "source": "/media/secondary",
+            "target": "/home/jovyan/datasets",
+            "type": "bind",
+            "consistency": "cached"
+        }
+    ],
+
+    "remoteEnv": {
+        "nnUNet_raw": "/home/jovyan/nnunet_data/nnUNet_raw",
+        "nnUNet_preprocessed": "/home/jovyan/nnunet_data/nnUNet_preprocessed",
+        "nnUNet_results": "/home/jovyan/nnunet_data/nnUNet_results",
+        "PYTHONPATH": "${containerWorkspaceFolder}:${containerEnv:PYTHONPATH}"
+    },
+
+    "remoteUser": "jovyan",
+
+    "postCreateCommand": "pip install black pylint pytest",
+
+    "containerEnv": {
+        "NVIDIA_VISIBLE_DEVICES": "all",
+        "NVIDIA_DRIVER_CAPABILITIES": "compute,utility",
+        "PYTHONUNBUFFERED": "1"
+    }
+}

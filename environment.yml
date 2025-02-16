@@ -1,0 +1,22 @@
+name: saturn
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.9
+  - pip
+  - scipy>=1.5.4
+  - matplotlib>=2.2.2
+  - pip:
+    - nnunetv2
+    - wilds>=2.0.0
+    - timm>=0.4.5
+    - imbalanced-learn==0.8.0
+    - xgboost>=0.90
+    - future>=0.18.0
+    - git+https://github.com/py-why/dowhy@ead8d47#egg=dowhy
+    - jupyterlab>=4.0.0
+    - ipykernel>=6.0.0
+    - blosc2

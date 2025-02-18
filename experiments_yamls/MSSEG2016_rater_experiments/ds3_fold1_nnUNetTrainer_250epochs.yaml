@@ -1,0 +1,25 @@
+schema_version: 2024.04.01
+type: job
+spec:
+  name: nnunet-train-ds3-fold1
+  owner: dgm-ms-brain-mri/pedro-maciasgordaliza
+  description: 'Training nnUNet for dataset 3 fold 1'
+  image: dgm-ms-brain-mri/pedro-maciasgordaliza/seg_model_attr:0.0.3
+  instance_type: 1xA100
+  environment_variables:
+    DATASET: "3"
+    FOLD: "1"
+    TRAINER: "nnUNetTrainer_250epochs"
+    nnUNet_raw: "/home/jovyan/shared/pedro-maciasgordaliza/ms-data/nnunet_folders/nnUNet_raw"
+    nnUNet_preprocessed: "/home/jovyan/shared/pedro-maciasgordaliza/ms-data/nnunet_folders/nnUNet_preprocessed"
+    nnUNet_results: "/home/jovyan/shared/pedro-maciasgordaliza/ms-data/nnunet_folders/nnUNet_results"
+  working_directory: /home/jovyan/workspace/CausalDropMedImg
+  command: 'nnUNetv2_train "3" 3d_fullres "1" -tr "nnUNetTrainer_250epochs" --npz && sc stop job nnunet-train-ds3-fold1'
+  scale: 1
+  use_spot_instance: false
+  schedule: null
+  token_scope: workspace:{self}:dask:write
+  shared_folders:
+    - owner: dgm-ms-brain-mri/pedro-maciasgordaliza
+      path: /home/jovyan/shared/pedro-maciasgordaliza/ms-data
+      name: ms-data

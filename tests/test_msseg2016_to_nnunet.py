@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 import nibabel as nib
 from nnunet_utils.image_modality_utils import ImageModalityName
-from nnunet_utils.nnunet_datasets import MSSEG2016Config, MSSEG2016ToNNUnetConverter, SubjectSelection
+from nnunet_utils.nnunet_derived_datasets import MSSEG2016Config, MSSEG2016ToNNUnetConverter, SubjectSelection
 
 @pytest.fixture
 def mock_msseg_data(tmp_path):
@@ -138,6 +138,7 @@ def test_default_conversion(mock_msseg_data, mock_nnunet_raw):
 
 def test_mixed_annotator_selection(mock_msseg_data, mock_nnunet_raw):
     """Test conversion with different annotator selections per subject."""
+    test_annotators = [4, 5, 6]
     config = MSSEG2016Config(
         modalities=["FLAIR", "T1"],
         subjects=[
@@ -158,12 +159,14 @@ def test_mixed_annotator_selection(mock_msseg_data, mock_nnunet_raw):
                 annotators=[1, 2, 3]
             ),
             # Test subject with different annotators
+
             SubjectSelection(
                 center="01",
                 subject_id="Patient_01",
                 split="test",
                 original_split="Testing",
-                annotators=[4, 5, 6]
+                annotators=test_annotators,
+                combine_annotations=None
             )
         ]
     )
@@ -188,9 +191,9 @@ def test_mixed_annotator_selection(mock_msseg_data, mock_nnunet_raw):
 
     # Check test files
     test_images = list((dataset_path / "imagesTs").glob("*_0000.nii.gz"))
-    test_labels = list((dataset_path / "labelsTs").glob("*.nii.gz"))
+    test_labels = list((dataset_path).rglob("labelsTs_*/*.nii.gz"))
     assert len(test_images) == 1  # One test subject
-    assert len(test_labels) == 1
+    assert len(test_labels) == len(test_annotators)
 
 def test_multiple_modalities_and_annotators(mock_msseg_data, mock_nnunet_raw):
     """Test handling of multiple modalities with different annotator selections."""

@@ -1,6 +1,6 @@
 from pathlib import Path
 from itertools import combinations
-from nnunet_datasets import MSSEG2016Config, MSSEG2016ToNNUnetConverter, SubjectSelection
+from nnunet_utils.nnunet_derived_datasets import MSSEG2016Config, MSSEG2016ToNNUnetConverter, SubjectSelection
 
 def create_annotator_specific_dataset(dataset_path, nnunet_raw,
                                       dataset_name,

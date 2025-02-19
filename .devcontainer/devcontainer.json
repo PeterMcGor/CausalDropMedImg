@@ -41,7 +41,7 @@
             "type": "bind"
         },
         {
-            "source": "/home/petermcgor/Documents/Projects/nnUNet_data_repository",
+            "source": "/home/petermcgor/Documents/Projects/nnUNet2/nnUNet_data_repository",
             "target": "/home/jovyan/nnunet_data",
             "type": "bind",
             "consistency": "cached"

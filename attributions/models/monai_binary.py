@@ -186,7 +186,7 @@ def main():
             test_folder,
             additional_data={'source': test_folder, 'deployment_data': process_case_id, 'test_data': 1}
         )
-
+        """
         # Split each dataset
         if isinstance(split_ratio, float):
             split_ratio = (split_ratio, split_ratio)
@@ -201,8 +201,9 @@ def main():
         train_val.merge(test_val)
         print(f"Training domain classifier dataset size: {len(train_train)}")
         print(f"Validation domain classifier dataset size: {len(train_val)}")
+        """
 
-        return train_train, train_val
+        return dataset1.merge_and_split(dataset2, split_ratio, seed=seed) #train_train, train_val
     # Create configurations
     classifier_config = BinaryClassifierConfig(
         model_type=MonaiModelType.DENSENET121,
@@ -237,9 +238,9 @@ def main():
 
     # Get your dataloaders
 
-    dataset_folder = '/home/jovyan/nnunet_data/nnUNet_preprocessed/Dataset824_FLAWS-HCO/'
+    dataset_folder = '/home/jovyan/shared/pedro-maciasgordaliza/ms-data/nnunet_folders/nnUNet_preprocessed/Dataset001_MSSEG_FLAIR_Annotator1'
     folder1 = os.path.join(dataset_folder, 'nnUNetPlans_3d_fullres_train_images')
-    folder2 = os.path.join(dataset_folder, 'nnUNetPlans_3d_fullres_test_images')
+    folder2 = os.path.join(dataset_folder, 'nnUNetPlans_3d_fullres_test_images_ann2')
 
 
     # Create datasets
@@ -253,7 +254,7 @@ def main():
         dataset_plans_path=os.path.join(dataset_folder, 'nnUNetPlans.json'),
         dataset_tr=train_ds,
         dataset_val=val_ds,
-        batch_size=4,
+        batch_size=8,
         num_processes=4
     )
 

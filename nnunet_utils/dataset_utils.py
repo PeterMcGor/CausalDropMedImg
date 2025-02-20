@@ -109,17 +109,22 @@ class MergerNNUNetDataset(nnUNetDataset):
         return new_dataset
 
 
-    def random_split(self, split_ratio: float = 0.8, shuffle: bool = True) -> Tuple['MergerNNUNetDataset', 'MergerNNUNetDataset']:
+    def random_split(self, split_ratio: float = 0.8, shuffle: bool = True, seed: int = 42) -> Tuple['MergerNNUNetDataset', 'MergerNNUNetDataset']:
         """
         Randomly split the dataset into two parts based on the split ratio.
 
         Args:
             split_ratio: Fraction of data to use for the first split (default 0.8)
             shuffle: Whether to shuffle the data before splitting (default True)
+            seed: Random seed for reproducibility (default 42)
 
         Returns:
             Tuple of (first_split, second_split) datasets
         """
+        
+        if seed is not None:
+            random.seed(seed)
+            
         keys = list(self.dataset.keys())
         if shuffle:
             random.shuffle(keys)
@@ -129,6 +134,33 @@ class MergerNNUNetDataset(nnUNetDataset):
         val_keys = keys[split_idx:]
 
         return self.subset(train_keys), self.subset(val_keys)
+
+    def merge_and_split(self, dataset_to_merge: nnUNetDataset,
+                        split_ratio: Union[Tuple[float, float], float] = 0.8, 
+                        **kwargs):
+        
+        """
+        Create training and validation datasets by:
+        1. Splitting each folder into train/val
+        2. Merging the train portions and val portions separately
+
+        returns:  Tuple[MergerNNUNetDataset, MergerNNUNetDataset]
+        """
+        assert self.additional_data.keys() == dataset_to_merge.additional_data.keys()
+        # Split each dataset
+        if isinstance(split_ratio, float):
+            split_ratio = (split_ratio, split_ratio)
+
+        train_train, train_val = self.random_split(split_ratio=split_ratio[0], **kwargs)
+        test_train, test_val = dataset_to_merge.random_split(split_ratio=split_ratio[1], **kwargs)
+        print(f"From the training of nnUNet for training domain classifier: {len(train_train)}, for validation: {len(train_val)}")
+        print(f"From the test of nnUNet for trainining domain classifier: {len(test_train)}, for validation {len(test_val)}")
+
+        # Merge training sets
+        train_train.merge(test_train)
+        train_val.merge(test_val)
+
+        return train_train, train_val
 
     def get_merged_datasets(self) -> List[nnUNetDataset]:
         """

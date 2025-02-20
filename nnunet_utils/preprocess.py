@@ -127,16 +127,16 @@ class AnyFolderPreprocessor(DefaultPreprocessor):
 
 def main():
     # Configuration
-    dataset_folder = '/home/jovyan/nnunet_data/nnUNet_preprocessed/Dataset824_FLAWS-HCO/'
-    raw_dataset_folder = '/home/jovyan/nnunet_data/nnUNet_raw/Dataset824_FLAWS-HCO/'
+    dataset_folder = '/home/jovyan/shared/pedro-maciasgordaliza/ms-data/nnunet_folders/nnUNet_preprocessed/Dataset001_MSSEG_FLAIR_Annotator1'
+    raw_dataset_folder = '/home/jovyan/shared/pedro-maciasgordaliza/ms-data/nnunet_folders/nnUNet_raw/Dataset001_MSSEG_FLAIR_Annotator1/'
     configuration = '3d_fullres'
     num_processes = 12
 
     # Initialize and run preprocessor
     preprocessor = AnyFolderPreprocessor(
         input_images_folder=os.path.join(raw_dataset_folder, 'imagesTs'),
-        input_segs_folder=os.path.join(raw_dataset_folder, 'labelsTs'),
-        output_folder=os.path.join(dataset_folder, 'nnUNetPlans_3d_fullres_test_images'),
+        input_segs_folder=os.path.join(raw_dataset_folder, 'labelsTs_2'),
+        output_folder=os.path.join(dataset_folder, 'nnUNetPlans_3d_fullres_test_images_ann2'),
         plans_file=os.path.join(dataset_folder, 'nnUNetPlans.json'),
         dataset_json_file=os.path.join(dataset_folder, 'dataset.json')
     )

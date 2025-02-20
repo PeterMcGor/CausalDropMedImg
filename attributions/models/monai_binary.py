@@ -7,9 +7,10 @@ from typing import Any, Dict, Tuple, Type, Optional, Union
 import monai.networks.nets as monai_nets
 import torch
 
-from attributions.models.base_models import CriterionConfig, MergedNNUNetDatasetTrainer, MetricConfig, MetricGoal, OptimizerConfig, TrainingConfig
+from attributions.models.base_models import CriterionConfig, MergedNNUNetDataLoaderSpecs, MergedNNUNetDatasetTrainer, MetricConfig, MetricGoal, OptimizerConfig, TrainingConfig
 from nnunet_utils.dataloader_utils import get_nnunet_dataloaders
 from nnunet_utils.dataset_utils import MergerNNUNetDataset
+from datetime import datetime
 
 class MonaiModelType(Enum):
     """Some of the MONAI models, check monai.networks.nets for more:
@@ -112,6 +113,7 @@ class BinaryMergedNNUNetTrainer(MergedNNUNetDatasetTrainer):
         cls,
         classifier_config: BinaryClassifierConfig,
         training_config: TrainingConfig,
+        dataloader_specs: MergedNNUNetDataLoaderSpecs,
         optimizer_config: Optional[OptimizerConfig] = None,
         criterion_config: Optional[CriterionConfig] = None
     ) -> 'BinaryMergedNNUNetTrainer':
@@ -144,6 +146,7 @@ class BinaryMergedNNUNetTrainer(MergedNNUNetDatasetTrainer):
             metric_computer=metric_computer,
             optimizer_config=optimizer_config,
             criterion_config=criterion_config,
+            dataloader_specs=dataloader_specs,
             output_transform=torch.nn.Softmax(dim=1)
         )
 
@@ -162,6 +165,8 @@ class BinaryMergedNNUNetTrainer(MergedNNUNetDatasetTrainer):
 
 # Example usage
 def main():
+    dataset = 'Dataset824_FLAWS-HCO'
+    dataset_folder = '/home/jovyan/nnunet_data/nnUNet_preprocessed/'+dataset
 
     def create_split_datasets(
         train_folder: str,
@@ -186,23 +191,6 @@ def main():
             test_folder,
             additional_data={'source': test_folder, 'deployment_data': process_case_id, 'test_data': 1}
         )
-        """
-        # Split each dataset
-        if isinstance(split_ratio, float):
-            split_ratio = (split_ratio, split_ratio)
-
-        train_train, train_val = dataset1.random_split(split_ratio=split_ratio[0], shuffle=True)
-        test_train, test_val = dataset2.random_split(split_ratio=split_ratio[1], shuffle=True)
-        print(f"From the training of nnUNet for training domain classifier: {len(train_train)}, for validation: {len(train_val)}")
-        print(f"From the test of nnUNet for trainining domain classifier: {len(test_train)}, for validation {len(test_val)}")
-
-        # Merge training sets
-        train_train.merge(test_train)
-        train_val.merge(test_val)
-        print(f"Training domain classifier dataset size: {len(train_train)}")
-        print(f"Validation domain classifier dataset size: {len(train_val)}")
-        """
-
         return dataset1.merge_and_split(dataset2, split_ratio, seed=seed) #train_train, train_val
     # Create configurations
     classifier_config = BinaryClassifierConfig(
@@ -211,14 +199,15 @@ def main():
         dropout_prob=0.2
     )
 
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     training_config = TrainingConfig(
-        num_epochs=100,
-        val_interval=5,
+        num_epochs=10,
+        val_interval=2,
         num_train_iterations_per_epoch=250,
         num_val_iterations_per_epoch=150,
         metric=MetricConfig('f1', MetricGoal.MAXIMIZE),
-        log_path=Path('./logs/monay_binary_classifier_test/'),
-        save_path=Path('./models_save/monai_binary_classifier_test/'),
+        log_path=Path(f'./logs/monay_binary_classifier_test/{dataset}_{timestamp}'),
+        save_path=Path(f'./models_save/monai_binary_classifier_test/{dataset}_{timestamp}'),
         device="cuda",
         verbosity=2
     )
@@ -229,37 +218,35 @@ def main():
         optimizer_kwargs={'lr': 1e-4}
     )
 
-    # Create trainer
-    trainer = BinaryMergedNNUNetTrainer.create(
-        classifier_config=classifier_config,
-        training_config=training_config,
-        optimizer_config=optimizer_config
-    )
-
-    # Get your dataloaders
-
-    dataset_folder = '/home/jovyan/shared/pedro-maciasgordaliza/ms-data/nnunet_folders/nnUNet_preprocessed/Dataset001_MSSEG_FLAIR_Annotator1'
+    dataset_folder = '/home/jovyan/nnunet_data/nnUNet_preprocessed/Dataset824_FLAWS-HCO'
     folder1 = os.path.join(dataset_folder, 'nnUNetPlans_3d_fullres_train_images')
-    folder2 = os.path.join(dataset_folder, 'nnUNetPlans_3d_fullres_test_images_ann2')
-
+    folder2 = os.path.join(dataset_folder, 'nnUNetPlans_3d_fullres_test_images')
 
     # Create datasets
     train_ds, val_ds = create_split_datasets(folder1, folder2, split_ratio=(0.2, 0.8))
     print(f"Training dataset size: {len(train_ds)}")
     print(f"Validation dataset size: {len(val_ds)}")
 
-
-    train_loader, val_loader = get_nnunet_dataloaders(
+    dataloader_specs = MergedNNUNetDataLoaderSpecs(
         dataset_json_path=os.path.join(dataset_folder, 'dataset.json'),
         dataset_plans_path=os.path.join(dataset_folder, 'nnUNetPlans.json'),
-        dataset_tr=train_ds,
+        dataset_train=train_ds,
         dataset_val=val_ds,
         batch_size=8,
-        num_processes=4
+        num_processes=4,
+        unpack_data=True
+        )
+
+    # Create trainer
+    trainer = BinaryMergedNNUNetTrainer.create(
+        classifier_config=classifier_config,
+        training_config=training_config,
+        optimizer_config=optimizer_config,
+        dataloader_specs=dataloader_specs
     )
 
     # Train
-    results = trainer.train(train_loader, val_loader)
+    results = trainer.train()
 
 if __name__ == '__main__':
     main()

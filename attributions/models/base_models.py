@@ -1,3 +1,4 @@
+import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
@@ -8,7 +9,8 @@ from torch.utils.tensorboard import SummaryWriter
 from batchgenerators.dataloading.single_threaded_augmenter import SingleThreadedAugmenter
 from batchgenerators.dataloading.nondet_multi_threaded_augmenter import NonDetMultiThreadedAugmenter
 import tqdm
-
+from nnunet_utils.dataloader_utils import get_nnunet_dataloaders
+from nnunetv2.training.dataloading.utils import unpack_dataset
 from nnunet_utils.dataset_utils import MergerNNUNetDataset
 
 # ===== Configuration Classes =====
@@ -59,11 +61,15 @@ class DataLoaderSpecs:
         self,
         loader_type: Union[Type, Tuple[Type, ...]],
         dataset_type: Union[Type, Tuple[Type, ...]],
-        batch_keys: list[str]
+        batch_keys: list[str],
+        batch_size: int = 2,
+        num_processes: int = max(1, os.cpu_count() - 2)
     ):
         self.loader_type = loader_type
         self.dataset_type = dataset_type
         self.batch_keys = batch_keys
+        self.batch_size = batch_size
+        self.num_processes = num_processes
 
     def validate_loader(self, loader: Any) -> bool:
         """Validate that loader meets specifications"""
@@ -79,12 +85,38 @@ class DataLoaderSpecs:
 
 class MergedNNUNetDataLoaderSpecs(DataLoaderSpecs):
     """Specifications for MergerNNUNetDataset and its dataloaders"""
-    def __init__(self):
+    def __init__(self,
+                 dataset_json_path: str,
+                 dataset_plans_path: str,
+                 dataset_train: MergerNNUNetDataset,
+                 dataset_val: MergerNNUNetDataset,
+                 unpack_data=True,
+                 cleanup_unpacked=True,
+                **kwargs):
         super().__init__(
             loader_type=(SingleThreadedAugmenter, NonDetMultiThreadedAugmenter),
             dataset_type=MergerNNUNetDataset,
             batch_keys=['data', 'target', 'properties']
         )
+        assert isinstance(dataset_json_path, str), "dataset_json_path must be a string"
+        assert isinstance(dataset_plans_path, str), "dataset_plans_path must be a string"
+        assert isinstance(dataset_train, MergerNNUNetDataset), "dataset_train must be an instance of MergerNNUNetDataset"
+        assert isinstance(dataset_val, MergerNNUNetDataset), "dataset_val must be an instance of MergerNNUNetDataset"
+        self.dataset_json_path = dataset_json_path
+        self.dataset_plans_path = dataset_plans_path
+        self.dataset_train = dataset_train
+        self.dataset_val = dataset_val
+        self.unpack_data = unpack_data
+        self.cleanup_unpacked = cleanup_unpacked
+
+        self.train_loader, self.val_loader = get_nnunet_dataloaders(
+        dataset_json_path=self.dataset_json_path,
+        dataset_plans_path=self.dataset_plans_path,
+        dataset_tr=self.dataset_train,
+        dataset_val=self.dataset_val,
+        batch_size=self.batch_size,
+        num_processes=4
+         )
 
     def validate_batch(self, batch: Dict[str, Any]) -> bool:
         """Validate batch structure from nnUNet dataloader"""
@@ -92,8 +124,8 @@ class MergedNNUNetDataLoaderSpecs(DataLoaderSpecs):
             return False
 
         # Validate properties contain required fields
-        if not all('test_data' in p for p in batch['properties']):
-            return False
+        #if not all('test_data' in p for p in batch['properties']):
+        #    return False
 
         # Validate data and target shapes match in batch dimension
         if batch['data'].shape[0] != batch['target'].shape[0]:
@@ -333,6 +365,7 @@ class MergedNNUNetDatasetTrainer(BaseTrainerWithSpecs):
         criterion: torch.nn.Module,
         config: TrainingConfig,
         metric_computer: Any,
+        dataloader_specs: MergedNNUNetDataLoaderSpecs,
         output_transform: Optional[Callable] = None
     ):
         super().__init__(
@@ -341,7 +374,7 @@ class MergedNNUNetDatasetTrainer(BaseTrainerWithSpecs):
             criterion=criterion,
             config=config,
             metric_computer=metric_computer,
-            dataloader_specs=MergedNNUNetDataLoaderSpecs()
+            dataloader_specs=dataloader_specs
         )
         self.output_transform = output_transform or (lambda x: x)
 
@@ -353,6 +386,7 @@ class MergedNNUNetDatasetTrainer(BaseTrainerWithSpecs):
         metric_computer: Any,
         optimizer_config: Optional[OptimizerConfig] = None,
         criterion_config: Optional[CriterionConfig] = None,
+        dataloader_specs: Optional[MergedNNUNetDataLoaderSpecs] = None,
         output_transform: Optional[Callable] = None
     ) -> 'MergedNNUNetDatasetTrainer':
         """Factory method to create a trainer instance"""
@@ -373,9 +407,35 @@ class MergedNNUNetDatasetTrainer(BaseTrainerWithSpecs):
             optimizer=optimizer,
             criterion=criterion,
             config=config,
+            dataloader_specs=dataloader_specs,
             metric_computer=metric_computer,
             output_transform=output_transform
         )
+
+    def train(self):
+        if self.dataloader_specs.unpack_data: # from nnUNet code
+            folders_unpack = {ds.folder for ds in (
+                                self.dataloader_specs.dataset_train.get_merged_datasets() +
+                                self.dataloader_specs.dataset_val.get_merged_datasets()
+                            )}
+            super()._log(f'unpacking datasets...{folders_unpack}')
+            for folder in folders_unpack:
+                unpack_dataset(folder, unpack_segmentation=True, overwrite_existing=False, num_processes=self.dataloader_specs.num_processes, verify_npy=True)
+            self._log('unpacking done...')
+
+        # call the real training
+        super().train(self.dataloader_specs.train_loader, self.dataloader_specs.val_loader)
+
+        # Delete unpacked .npy files after training
+        if self.dataloader_specs.cleanup_unpacked:
+            for folder in folders_unpack:
+                self._log(f"Cleaining unpacked files in {folder}")
+                for npy_file in Path(folder).rglob('*.npy'):
+                    try:
+                        os.remove(npy_file)
+                        self._log(f"Deleted file: {npy_file}")
+                    except Exception as e:
+                        self._log(f"Error deleting file {npy_file}: {e}", level=2)
 
     def _process_batch(self, batch: Dict[str, Any]) -> tuple:
         """Process batch from MergerNNUNetDataset format"""

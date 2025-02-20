@@ -55,3 +55,6 @@ nnUNet_results/
 # Logs
 logs/
 *.log
+Dockerfile_old
+models_save/
+nnunet_dataset_example.txt

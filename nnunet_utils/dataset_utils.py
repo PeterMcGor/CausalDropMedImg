@@ -24,6 +24,7 @@ class MergerNNUNetDataset(nnUNetDataset):
             additional_data (Dict[str, Union[str, int, float]], optional): Additional data to store with the dataset
         """
         super().__init__(*args, **kwargs)
+        self.folder = args[0] if args else None
         self._merged_datasets: List[nnUNetDataset] = []
         self.additional_data = additional_data if additional_data is not None else {}
         """
@@ -71,6 +72,8 @@ class MergerNNUNetDataset(nnUNetDataset):
             )
 
         # Store reference to merged dataset
+        if len(self._merged_datasets) == 0:
+            self._merged_datasets.append(self)
         self._merged_datasets.append(dataset)
 
         # Merge the datasets
@@ -121,10 +124,10 @@ class MergerNNUNetDataset(nnUNetDataset):
         Returns:
             Tuple of (first_split, second_split) datasets
         """
-        
+
         if seed is not None:
             random.seed(seed)
-            
+
         keys = list(self.dataset.keys())
         if shuffle:
             random.shuffle(keys)
@@ -136,9 +139,9 @@ class MergerNNUNetDataset(nnUNetDataset):
         return self.subset(train_keys), self.subset(val_keys)
 
     def merge_and_split(self, dataset_to_merge: nnUNetDataset,
-                        split_ratio: Union[Tuple[float, float], float] = 0.8, 
+                        split_ratio: Union[Tuple[float, float], float] = 0.8,
                         **kwargs):
-        
+
         """
         Create training and validation datasets by:
         1. Splitting each folder into train/val

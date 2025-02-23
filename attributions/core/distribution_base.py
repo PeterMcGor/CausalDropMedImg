@@ -11,13 +11,34 @@ class DistributionType(Enum):
     CONDITIONAL = "conditional" # P(Y|X)
     JOINT = "joint"           # P(X,Y)
 
+
 @dataclass
 class MechanismSpec:
-    """Specification of a causal mechanism to analyze"""
+    """Specification of a causal mechanism to analyze."""
+
     name: str
-    type: DistributionType
     variables: List[str]
     parents: Optional[List[str]] = None
+    separator: str = ','
+
+    def __post_init__(self):
+        """Ensures instance variables are properly initialized."""
+        self.variables_key = self.get_variables_string()
+        self.parents_key = self.get_parents_string()
+        self.is_root = True if self.parents is None or len(self.parents) == 0 else False
+
+    @staticmethod
+    def sort_string_list(string_list: List[str]) -> List[str]:
+        """Sorts a list of strings alphabetically."""
+        return sorted(string_list)
+
+    def get_variables_string(self) -> str:
+        """Returns the variables list as a sorted, joined string."""
+        return self.separator.join(self.sort_string_list(self.variables))
+
+    def get_parents_string(self) -> str:
+        """Returns the parents list as a sorted, joined string."""
+        return self.separator.join(self.sort_string_list(self.parents or []))
 
 class DistributionEstimator(ABC):
     """Base class for estimating distributions under different approaches"""

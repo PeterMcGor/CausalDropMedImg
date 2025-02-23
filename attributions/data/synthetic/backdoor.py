@@ -1,9 +1,11 @@
 import numpy as np
 import pandas as pd
 import networkx as nx
+from dowhy import gcm
 from typing import Dict, Tuple, List
 from dataclasses import dataclass
 from sklearn.model_selection import train_test_split
+
 
 @dataclass
 class BackdoorParams:
@@ -34,18 +36,19 @@ class BackdoorSpurious:
     FEATURE_NAMES = ['X1', 'X2', 'X3']
     NODE_NAMES = ['G', 'Y', 'X1', 'X2', 'X3']
 
-    def __init__(self, params: BackdoorParams):
+    def __init__(self, params: BackdoorParams, is_scm=False):
         """
         Args:
             params: Parameters for data generation
         """
         self.params = params
+        self.is_scm = is_scm
 
         # Create causal graph using networkx
-        self.graph = self._create_graph()
+        self.graph = self._create_graph(self.is_scm)
 
     @classmethod
-    def _create_graph(cls) -> nx.DiGraph:
+    def _create_graph(cls, is_scm) -> nx.DiGraph:
         """Create causal graph using networkx"""
         # Create directed graph
         g = nx.DiGraph()
@@ -64,7 +67,8 @@ class BackdoorSpurious:
         ]
         g.add_edges_from(edges)
 
-        return g
+        return gcm.StructuralCausalModel(g) if is_scm else g
+
 
     def generate_data(
         self,
@@ -105,7 +109,8 @@ class BackdoorSpurious:
         return train_test_split(
             data,
             test_size=self.params.test_pct,
-            random_state=self.params.data_seed
+            #random_state=self.params.data_seed,
+            random_state=0
         )
 
     def get_target_data(
@@ -121,5 +126,13 @@ class BackdoorSpurious:
         return train_test_split(
             data,
             test_size=target_params.test_pct,
-            random_state=target_params.data_seed
+            random_state=1
         )
+    def print_graph(self):
+        """Print the causal graph"""
+        import matplotlib.pyplot as plt
+
+        pos = nx.spring_layout(self.graph)
+        nx.draw(self.graph, pos, with_labels=True, node_size=3000, node_color='lightblue', font_size=10, font_weight='bold')
+        plt.title("Causal Graph")
+        plt.show()

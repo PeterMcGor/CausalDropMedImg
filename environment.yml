@@ -16,7 +16,9 @@ dependencies:
     - imbalanced-learn==0.8.0
     - xgboost>=0.90
     - future>=0.18.0
-    - git+https://github.com/py-why/dowhy@ead8d47#egg=dowhy
+    ## before trying with newer dowhy version on the teminal not in the enviromet "pip freeze | grep dowhy ---> dowhy @ git+https://github.com/py-why/dowhy@ead8d47102f0ac6db51d84432874c331fb84f3cb"
+    #- git+https://github.com/py-why/dowhy@ead8d47#egg=dowhy
+    - dowhy
     - jupyterlab>=4.0.0
     - ipykernel>=6.0.0
     - blosc2

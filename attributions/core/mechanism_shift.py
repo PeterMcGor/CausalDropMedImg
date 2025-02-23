@@ -4,14 +4,16 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 import networkx as nx
+from dowhy import gcm
 from torch.utils.data import Dataset
 
 from .distribution_base import DistributionEstimator, MechanismSpec
-from dowhy.gcm.shapley import ShapleyConfig, estimate_shapley_values
+from dowhy.gcm import shapley
+
 
 class CausalMechanismShift:
     """Analyzes performance changes due to shifts in causal mechanisms using Shapley values.
-
+    # TODO
     This class implements the approach from the paper "Why did the Model Fail?", using
     Shapley values to attribute performance changes to shifts in causal mechanisms.
     Each mechanism represents a component of the causal factorization P(V) = ∏ P(Xi|Pa(Xi)).
@@ -21,7 +23,7 @@ class CausalMechanismShift:
         self,
         distribution_estimator: DistributionEstimator,
         causal_graph: nx.DiGraph,
-        shapley_config: Optional[ShapleyConfig] = None,
+        shapley_config: Optional[shapley.ShapleyConfig] = None,
     ):
         """
         Args:
@@ -31,24 +33,24 @@ class CausalMechanismShift:
         """
         self.distribution_estimator = distribution_estimator
         self.graph = causal_graph
-        self.shapley_config = shapley_config or ShapleyConfig()
+        self.shapley_config = shapley_config or shapley.ShapleyConfig()
 
         # Extract mechanisms from graph
         self.mechanisms = self._extract_mechanisms_from_graph()
 
+    # TODO Mechanism doesntlook a good name her esince normally the mechanism is directly the function conecting the nodes
     def _extract_mechanisms_from_graph(self) -> List[MechanismSpec]:
-        """Extract causal mechanisms from graph factorization P(V) = ∏ P(Xi|Pa(Xi))"""
         mechanisms = []
         for node in self.graph.nodes():
-            # Get parents from graph
             parents = list(self.graph.predecessors(node))
-
-            spec = MechanismSpec(
-                name=node,
-                variables=[node],
-                parents=parents if parents else None
+            # Define mechanism as P(node | parents)
+            mechanisms.append(
+                MechanismSpec(
+                    name=f"P({node}|{','.join(parents)})" if parents else f"P({node})",
+                    variables=[node]+parents,
+                    parents=parents
+                )
             )
-            mechanisms.append(spec)
         return mechanisms
 
     def _compute_mechanism_shift_value(
@@ -67,16 +69,23 @@ class CausalMechanismShift:
         at source distribution.
         """
         # Ensure mechanisms follow causal ordering
-        ordered_mechanisms = self._order_mechanisms_topologically(shifted_mechanisms)
+        #ordered_mechanisms = self._order_mechanisms_topologically(shifted_mechanisms)
+        source_perf = metric_fn(model, source_data, **metric_kwargs)#TODO why is done all times?
 
-        return self.distribution_estimator.estimate_performance_shift(
+        shifted_perf = self.distribution_estimator.estimate_performance_shift(
             source_data=source_data,
             target_data=target_data,
-            mechanisms=ordered_mechanisms,
+            mechanisms=shifted_mechanisms,#ordered_mechanisms,
             model=model,
             metric_fn=metric_fn,
             **metric_kwargs
         )
+        # Debug prints
+        #print(f"\nMechanisms: {[m.name for m in shifted_mechanisms]}")
+        #print(f"Source perf: {source_perf:.4f}, Shifted perf: {shifted_perf:.4f}")
+        print(f"Delta: {shifted_perf - source_perf:.4f}")
+
+        return shifted_perf - source_perf
 
     def _order_mechanisms_topologically(
         self,
@@ -129,7 +138,7 @@ class CausalMechanismShift:
             )
 
         # Compute Shapley values using dowhy implementation
-        shapley_values = estimate_shapley_values(
+        shapley_values = shapley.estimate_shapley_values(
             set_func=mechanism_value_function,
             num_players=len(self.mechanisms),
             shapley_config=self.shapley_config

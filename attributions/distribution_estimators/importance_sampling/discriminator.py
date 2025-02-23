@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional, Union, Tuple
+from typing import Any, Dict, List, Optional, Union, Tuple, Callable
 import torch
 import numpy as np
 import pandas as pd
@@ -44,44 +44,40 @@ class DiscriminatorRatioEstimator(DensityRatioEstimator):
         self.fitted_models: Dict[str, Any] = {}
         self.model_metrics: Dict[str, Dict[str, float]] = {}
 
+    #TODO this has to be moved to the base class and make it work for no dataframes data
     def _prepare_discriminator_data(
         self,
+        features: List[str],
         source_data: Union[pd.DataFrame, np.ndarray],
-        target_data: Union[pd.DataFrame, np.ndarray],
-        mechanism: MechanismSpec
+        target_data: Union[pd.DataFrame, np.ndarray] = None # In inference
     ) -> Tuple[np.ndarray, np.ndarray]:
         """Prepare data for discriminator training according to mechanism structure"""
-        # Convert to numpy if needed
-        if isinstance(source_data, pd.DataFrame):
-            source_arr = source_data.values
-            target_arr = target_data.values
+
+
+        # Extract features from source/target data
+        #print("Source data", type(source_data))
+        source_subset = source_data[features]
+        if target_data is not None:
+            target_subset = target_data[features]
+
+            # Combine into training data
+            X = np.concatenate([source_subset, target_subset])
+            y = np.concatenate([np.zeros(len(source_subset)), np.ones(len(target_subset))])
+            return X, y
         else:
-            source_arr = source_data
-            target_arr = target_data
+            return np.concatenate([source_subset])#X
 
-        # Get relevant features for mechanism
-        features = []
-        if mechanism.parents:
-            features.extend(mechanism.parents)
-        features.extend(mechanism.variables)
 
-        # Return combined training data and labels
-        X = np.concatenate([source_arr, target_arr])
-        y = np.concatenate([
-            np.zeros(len(source_arr)),
-            np.ones(len(target_arr))
-        ])
-
-        return X, y
-
-    def _fit_mechanism_model(
+    # TODO this just work with dataframes and sklearn
+    def _fit_mechanism_models(
         self,
         source_data: Union[pd.DataFrame, np.ndarray],
         target_data: Union[pd.DataFrame, np.ndarray],
-        mechanism: MechanismSpec
+        input_features: List[str],
+        register_key:str
     ) -> None:
         """Fit discriminator for a specific mechanism"""
-        X, y = self._prepare_discriminator_data(source_data, target_data, mechanism)
+        X, y = self._prepare_discriminator_data(input_features, source_data, target_data)
 
         # Clone and fit base model
         model = clone(self.base_model).fit(X, y)
@@ -95,12 +91,13 @@ class DiscriminatorRatioEstimator(DensityRatioEstimator):
             ).fit(X, y)
 
         # Store model
-        key = self._get_mechanism_key(mechanism)
-        self.fitted_models[key] = model
+        #key = self._get_mechanism_key(mechanism)
+        #key = MechanismSpec.sort_string_list(input_features)
+        self.fitted_models[register_key] = model
 
         # Compute and store metrics
         probs = model.predict_proba(X)[:, 1]
-        self.model_metrics[key] = {
+        self.model_metrics[register_key] = {
             'roc_auc': roc_auc_score(y, probs),
             'brier': brier_score_loss(y, probs)
         }
@@ -113,8 +110,14 @@ class DiscriminatorRatioEstimator(DensityRatioEstimator):
     ) -> None:
         """Fit discriminators for all mechanisms"""
         for mechanism in mechanisms:
-            self._fit_mechanism_model(source_data, target_data, mechanism)
+            print("Fitting", mechanism)
+            self._fit_mechanism_models(source_data, target_data, mechanism.variables, mechanism.variables_key)
+            if not mechanism.is_root:
+                if mechanism.parents_key not in self.fitted_models.keys():
+                    print("Fitting parents", mechanism.parents)
+                    self._fit_mechanism_models(source_data, target_data, mechanism.parents, mechanism.parents_key)
         self.fitted = True
+        print("Fitted models", self.fitted_models, len(self.fitted_models))
 
     def estimate_ratio(
         self,
@@ -128,11 +131,12 @@ class DiscriminatorRatioEstimator(DensityRatioEstimator):
         """
         self.check_is_fitted()
 
+
         # Start with all ones
         ratios = np.ones(len(data))
 
         # Multiply ratios for each mechanism
-        for mechanism in mechanisms:
+        for i,mechanism in enumerate(mechanisms):
             mechanism_ratio = self._estimate_mechanism_ratio(data, mechanism)
             ratios *= mechanism_ratio
 
@@ -141,39 +145,71 @@ class DiscriminatorRatioEstimator(DensityRatioEstimator):
     def _estimate_mechanism_ratio(
         self,
         data: Union[pd.DataFrame, np.ndarray],
-        mechanism: MechanismSpec
+        mechanism: MechanismSpec,
+        root_node_prior_coef:int = 1,
     ) -> np.ndarray:
         """Estimate ratio for a specific mechanism"""
-        if isinstance(data, pd.DataFrame):
-            data = data.values
+        def get_dicrimination_ratios(variables, variables_key):
+            # Get model for this mechanism
+            data_filtered = self._prepare_discriminator_data(features=variables, source_data=data, target_data=None)
+            model = self.fitted_models[variables_key]
+            probs = model.predict_proba(data_filtered)
+            # Clip probabilities if needed
+            if self.clip_probabilities is not None:
+                probs = np.clip(
+                    probs,
+                    1 - self.clip_probabilities,
+                    self.clip_probabilities
+                )
+            ratios = probs[:, 1] / probs[:, 0]
+            # Clip ratios if needed
+            if self.clip_ratios is not None:
+                ratios = np.clip(
+                    ratios,
+                    1 / self.clip_ratios,
+                    self.clip_ratios
+                )
+            return ratios
 
-        # Get model for this mechanism
-        key = self._get_mechanism_key(mechanism)
-        model = self.fitted_models[key]
+        ratios = get_dicrimination_ratios(mechanism.variables, mechanism.variables_key)
 
-        # Get probabilities
-        probs = model.predict_proba(data)
+        if mechanism.is_root:
+            print("Root Mechanism:", mechanism, ratios.mean())
+            return ratios*root_node_prior_coef
+        else:
+            print("Not Root:", mechanism, ratios.mean())
+            return ratios/get_dicrimination_ratios(mechanism.parents, mechanism.parents_key)
 
-        # Clip probabilities if needed
-        if self.clip_probabilities is not None:
-            probs = np.clip(
-                probs,
-                1 - self.clip_probabilities,
-                self.clip_probabilities
-            )
 
-        # Compute ratios
-        ratios = probs[:, 1] / probs[:, 0]
+    def estimate_performance_shift(
+        self,
+        source_data: pd.DataFrame,
+        mechanisms: List[MechanismSpec],
+        model: torch.nn.Module,
+        metric_fn: Callable,
+        target_data: pd.DataFrame = None,
+        **metric_kwargs
+    ) -> float:
+        """Compute performance change when only the `mechanisms` shift."""
+        # Step 1: Compute importance weights for the shifted mechanisms
+        print("Estimating rtaio for ", mechanisms)
+        weights = self.estimate_ratio(
+            data=source_data,
+            mechanisms=mechanisms
+        )
 
-        # Clip ratios if needed
-        if self.clip_ratios is not None:
-            ratios = np.clip(
-                ratios,
-                1 / self.clip_ratios,
-                self.clip_ratios
-            )
+        # Add weight diagnostics
+        print(f" Weight stats - Mean: {weights.mean():.2f}, Std: {weights.std():.2f}")
+        print(f" Min: {weights.min():.2f}, Max: {weights.max():.2f}")
 
-        return ratios
+        # Step 2: Evaluate model performance under shifted distribution
+        shifted_performance = metric_fn(
+            model,
+            source_data,
+            weights=weights,
+            **metric_kwargs
+        )
+        return shifted_performance
 
     @staticmethod
     def _get_mechanism_key(mechanism: MechanismSpec) -> str:

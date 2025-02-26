@@ -178,7 +178,8 @@ def get_nnunet_dataloaders(
     batch_size: int = 2,
     oversample_foreground_percent: float = 0.33,
     num_processes: int = max(1, os.cpu_count() - 2),
-    device: Union[str, torch_device] = 'cuda'
+    device: Union[str, torch_device] = 'cuda',
+    inference = False
 ) -> Tuple[Union[SingleThreadedAugmenter, NonDetMultiThreadedAugmenter],
            Union[SingleThreadedAugmenter, NonDetMultiThreadedAugmenter]]:
     """
@@ -211,18 +212,19 @@ def get_nnunet_dataloaders(
     aug_config = get_augmentation_config(config_manager.patch_size)
 
     # Create transforms
-    tr_transforms = nnUNetTrainer.get_training_transforms(
-        patch_size=config_manager.patch_size,
-        rotation_for_DA=aug_config.rotation_range,
-        deep_supervision_scales=deep_supervision_scales,
-        mirror_axes=aug_config.mirror_axes,
-        do_dummy_2d_data_aug=aug_config.use_dummy_2d,
-        use_mask_for_norm=config_manager.use_mask_for_norm,
-        is_cascaded=is_cascaded,
-        foreground_labels=label_manager.foreground_labels,
-        regions=label_manager.foreground_regions if label_manager.has_regions else None,
-        ignore_label=label_manager.ignore_label
-    )
+    if not inference:
+        tr_transforms = nnUNetTrainer.get_training_transforms(
+            patch_size=config_manager.patch_size,
+            rotation_for_DA=aug_config.rotation_range,
+            deep_supervision_scales=deep_supervision_scales,
+            mirror_axes=aug_config.mirror_axes,
+            do_dummy_2d_data_aug=aug_config.use_dummy_2d,
+            use_mask_for_norm=config_manager.use_mask_for_norm,
+            is_cascaded=is_cascaded,
+            foreground_labels=label_manager.foreground_labels,
+            regions=label_manager.foreground_regions if label_manager.has_regions else None,
+            ignore_label=label_manager.ignore_label
+        )
 
     val_transforms = nnUNetTrainer.get_validation_transforms(
         deep_supervision_scales=deep_supervision_scales,
@@ -234,18 +236,24 @@ def get_nnunet_dataloaders(
 
     # Create dataloaders
     factory = DataloaderFactory(batch_size, label_manager, oversample_foreground_percent, device)
-    train_loader = factory.create_dataloader(dataset_tr, config_manager.patch_size, tr_transforms, True)
+    if not inference:
+        train_loader = factory.create_dataloader(dataset_tr, config_manager.patch_size, tr_transforms, True)
     val_loader = factory.create_dataloader(dataset_val, config_manager.patch_size, val_transforms, False)
 
     # Create and initialize augmenters
-    train_augmenter = create_augmenter(train_loader, num_processes,True, device)
+    if not inference:
+        train_augmenter = create_augmenter(train_loader, num_processes,True, device)
     val_augmenter = create_augmenter(val_loader, num_processes, False, device)
 
     # Initialize augmenters
-    _ = next(train_augmenter)
+    if not inference:
+        _ = next(train_augmenter)
     _ = next(val_augmenter)
 
-    return train_augmenter, val_augmenter
+    if not inference:
+        return train_augmenter, val_augmenter
+    else:
+        return None, val_loader
 
 
 # Example usage:

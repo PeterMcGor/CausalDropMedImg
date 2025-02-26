@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Union, Optional, Callable
 from dataclasses import dataclass
 import numpy as np
+from sklearn.base import BaseEstimator
 import torch
 import networkx as nx
 from dowhy import gcm
@@ -13,9 +14,7 @@ from dowhy.gcm import shapley
 
 class CausalMechanismShift:
     """Analyzes performance changes due to shifts in causal mechanisms using Shapley values.
-    # TODO
-    This class implements the approach from the paper "Why did the Model Fail?", using
-    Shapley values to attribute performance changes to shifts in causal mechanisms.
+    # TODO this class is bases in shaprley values, whatever are got. Not valid for other apporaches
     Each mechanism represents a component of the causal factorization P(V) = ∏ P(Xi|Pa(Xi)).
     """
 
@@ -37,6 +36,7 @@ class CausalMechanismShift:
 
         # Extract mechanisms from graph
         self.mechanisms = self._extract_mechanisms_from_graph()
+        self.baseline_performance = None
 
     # TODO Mechanism doesntlook a good name her esince normally the mechanism is directly the function conecting the nodes
     def _extract_mechanisms_from_graph(self) -> List[MechanismSpec]:
@@ -56,8 +56,8 @@ class CausalMechanismShift:
     def _compute_mechanism_shift_value(
         self,
         shifted_mechanisms: List[MechanismSpec],
-        source_data: Union[Dataset, torch.Tensor, Any],
-        target_data: Union[Dataset, torch.Tensor, Any],
+        train_env_data: Union[Dataset, torch.Tensor, Any],
+        inference_env_data: Union[Dataset, torch.Tensor, Any],
         model: torch.nn.Module,
         metric_fn: Callable,
         **metric_kwargs
@@ -65,16 +65,15 @@ class CausalMechanismShift:
         """Compute performance change when only the specified mechanisms shift.
 
         This implements v(S) in the Shapley formula, representing the value when
-        mechanisms S shift from source to target distribution while others remain
-        at source distribution.
+        mechanisms S shift from train_env to inference_env distribution while others remain
+        at train_env distribution.
         """
         # Ensure mechanisms follow causal ordering
         #ordered_mechanisms = self._order_mechanisms_topologically(shifted_mechanisms)
-        source_perf = metric_fn(model, source_data, **metric_kwargs)#TODO why is done all times?
 
         shifted_perf = self.distribution_estimator.estimate_performance_shift(
-            source_data=source_data,
-            target_data=target_data,
+            train_env_data=train_env_data,
+            inference_env_data=inference_env_data,
             mechanisms=shifted_mechanisms,#ordered_mechanisms,
             model=model,
             metric_fn=metric_fn,
@@ -82,10 +81,10 @@ class CausalMechanismShift:
         )
         # Debug prints
         #print(f"\nMechanisms: {[m.name for m in shifted_mechanisms]}")
-        #print(f"Source perf: {source_perf:.4f}, Shifted perf: {shifted_perf:.4f}")
-        print(f"Delta: {shifted_perf - source_perf:.4f}")
+        #print(f"train_env perf: {train_env_perf:.4f}, Shifted perf: {shifted_perf:.4f}")
+        print(f"Performance change: {shifted_perf - self.baseline_performance:.4f}")
 
-        return shifted_perf - source_perf
+        return shifted_perf - self.baseline_performance
 
     def _order_mechanisms_topologically(
         self,
@@ -107,18 +106,18 @@ class CausalMechanismShift:
 
     def analyze_shift(
         self,
-        source_data: Union[Dataset, torch.Tensor, Any],
-        target_data: Union[Dataset, torch.Tensor, Any],
-        model: torch.nn.Module,
+        train_env_data: Union[Dataset, torch.Tensor, Any],
+        inference_env_data: Union[Dataset, torch.Tensor, Any],
+        model: Union[torch.nn.Module, BaseEstimator],
         metric_fn: Callable,
         **metric_kwargs
     ) -> Dict[str, float]:
         """Analyze performance shift and attribute to mechanisms using Shapley values.
 
         Args:
-            source_data: Data from source distribution
-            target_data: Data from target distribution
-            model: Model to evaluate
+            train_env_data: Data from train_env distribution
+            inference_env_data: Data from inference_env distribution
+            model: Model to evaluate. The one employed to train the `train_env_data`
             metric_fn: Metric to measure performance
             metric_kwargs: Additional metric arguments
 
@@ -133,9 +132,13 @@ class CausalMechanismShift:
 
             # Compute value when these mechanisms shift
             return self._compute_mechanism_shift_value(
-                shifted, source_data, target_data,
+                shifted, train_env_data, inference_env_data,
                 model, metric_fn, **metric_kwargs
             )
+
+        # I need the change in performance repsect to the baseline as shapely value
+        # Performing this here is not need to do it each timeI want to measure a change
+        self.baseline_performance = metric_fn(model, train_env_data, **metric_kwargs)
 
         # Compute Shapley values using dowhy implementation
         shapley_values = shapley.estimate_shapley_values(
@@ -152,15 +155,15 @@ class CausalMechanismShift:
 
     def get_mechanism_ordering(
         self,
-        source_data: Union[Dataset, torch.Tensor, Any],
-        target_data: Union[Dataset, torch.Tensor, Any],
+        train_env_data: Union[Dataset, torch.Tensor, Any],
+        inference_env_data: Union[Dataset, torch.Tensor, Any],
         model: torch.nn.Module,
         metric_fn: Callable,
         **metric_kwargs
     ) -> List[str]:
         """Get mechanisms ordered by magnitude of contribution to shift."""
         attributions = self.analyze_shift(
-            source_data, target_data, model, metric_fn, **metric_kwargs
+            train_env_data, inference_env_data, model, metric_fn, **metric_kwargs
         )
         sorted_items = sorted(
             attributions.items(),

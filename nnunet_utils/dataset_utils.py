@@ -12,6 +12,10 @@ class MergerNNUNetDataset(nnUNetDataset):
     the ability to combine data from multiple sources.
     """
     DATASET_INFO = 'dataset_info'
+    BATCH_IMAGES_KEY = 'data'
+    BATCH_SEG_KEY = 'target'
+    BATCH_PROPERTIES_KEY = 'properties'
+
 
     def __init__(self, *args, additional_data: Dict[str, Union[str, int, float]] = None, **kwargs):
         """

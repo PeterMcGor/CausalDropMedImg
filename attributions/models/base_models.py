@@ -3,15 +3,20 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Union, Type, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Optional, Union, Type, Tuple
+import numpy as np
 import torch
+
 from torch.utils.tensorboard import SummaryWriter
-from batchgenerators.dataloading.single_threaded_augmenter import SingleThreadedAugmenter
-from batchgenerators.dataloading.nondet_multi_threaded_augmenter import NonDetMultiThreadedAugmenter
+
+
 import tqdm
-from nnunet_utils.dataloader_utils import get_nnunet_dataloaders
-from nnunetv2.training.dataloading.utils import unpack_dataset
+
+
+from nnunetv2.inference.data_iterators import preprocessing_iterator_fromfiles
 from nnunet_utils.dataset_utils import MergerNNUNetDataset
+from batchgenerators.utilities.file_and_folder_operations import load_json
+
 
 # ===== Configuration Classes =====
 class MetricGoal(Enum):
@@ -35,8 +40,8 @@ class TrainingConfig:
     num_epochs: int
     val_interval: int
     metric: MetricConfig
-    num_train_iterations_per_epoch: int  # Add this
-    num_val_iterations_per_epoch: int    # Add this
+    num_train_iterations_per_epoch: int
+    num_val_iterations_per_epoch: int    
     save_path: Path = Path("models")
     log_path: Path = Path("logs")
     device: Union[str, torch.device] = "cuda"
@@ -82,56 +87,6 @@ class DataLoaderSpecs:
     def validate_batch(self, batch: Dict[str, Any]) -> bool:
         """Validate that batch contains required keys"""
         return all(key in batch for key in self.batch_keys)
-
-class MergedNNUNetDataLoaderSpecs(DataLoaderSpecs):
-    """Specifications for MergerNNUNetDataset and its dataloaders"""
-    def __init__(self,
-                 dataset_json_path: str,
-                 dataset_plans_path: str,
-                 dataset_train: MergerNNUNetDataset,
-                 dataset_val: MergerNNUNetDataset,
-                 unpack_data=True,
-                 cleanup_unpacked=True,
-                **kwargs):
-        super().__init__(
-            loader_type=(SingleThreadedAugmenter, NonDetMultiThreadedAugmenter),
-            dataset_type=MergerNNUNetDataset,
-            batch_keys=['data', 'target', 'properties']
-        )
-        assert isinstance(dataset_json_path, str), "dataset_json_path must be a string"
-        assert isinstance(dataset_plans_path, str), "dataset_plans_path must be a string"
-        assert isinstance(dataset_train, MergerNNUNetDataset), "dataset_train must be an instance of MergerNNUNetDataset"
-        assert isinstance(dataset_val, MergerNNUNetDataset), "dataset_val must be an instance of MergerNNUNetDataset"
-        self.dataset_json_path = dataset_json_path
-        self.dataset_plans_path = dataset_plans_path
-        self.dataset_train = dataset_train
-        self.dataset_val = dataset_val
-        self.unpack_data = unpack_data
-        self.cleanup_unpacked = cleanup_unpacked
-
-        self.train_loader, self.val_loader = get_nnunet_dataloaders(
-        dataset_json_path=self.dataset_json_path,
-        dataset_plans_path=self.dataset_plans_path,
-        dataset_tr=self.dataset_train,
-        dataset_val=self.dataset_val,
-        batch_size=self.batch_size,
-        num_processes=4
-         )
-
-    def validate_batch(self, batch: Dict[str, Any]) -> bool:
-        """Validate batch structure from nnUNet dataloader"""
-        if not super().validate_batch(batch):
-            return False
-
-        # Validate properties contain required fields
-        #if not all('test_data' in p for p in batch['properties']):
-        #    return False
-
-        # Validate data and target shapes match in batch dimension
-        if batch['data'].shape[0] != batch['target'].shape[0]:
-            return False
-
-        return True
 
 # ===== Base Trainer =====
 class BaseTrainerWithSpecs(ABC):
@@ -187,7 +142,7 @@ class BaseTrainerWithSpecs(ABC):
         """Validate dataloader meets specifications"""
         if not hasattr(dataloader, '__iter__'):
             return False
-        return self.dataloader_specs.validate_loader(dataloader)
+        return True#self.dataloader_specs.validate_loader(dataloader)
 
     def _log(self, message: str, level: int = 1):
         """Log message if verbosity level is sufficient"""
@@ -210,6 +165,9 @@ class BaseTrainerWithSpecs(ABC):
 
     def train_epoch(self, train_loader: Any, epoch: int) -> float:
         """Run single training epoch"""
+        if not isinstance(train_loader, Iterator):
+            train_loader = iter(train_loader)
+
         if not self._validate_dataloader(train_loader):
             raise ValueError("Invalid train_loader type")
 
@@ -253,6 +211,8 @@ class BaseTrainerWithSpecs(ABC):
         return avg_loss
 
     def validate(self, val_loader: Any, epoch: int) -> Dict[str, float]:
+        if not isinstance(val_loader, Iterator):
+            val_loader = iter(val_loader)
         """Run validation"""
         if not self._validate_dataloader(val_loader):
             raise ValueError("Invalid val_loader type")
@@ -355,107 +315,259 @@ class BaseTrainerWithSpecs(ABC):
         self.writer.close()
         return final_report
 
-# ===== Merged nnUNet Dataset Trainer =====
-class MergedNNUNetDatasetTrainer(BaseTrainerWithSpecs):
-    """Trainer for models using MergerNNUNetDataset and nnUNet dataloaders"""
+@dataclass
+class InferenceConfig:
+    """Simple configuration for inference"""
+    def __init__(
+        self,
+        model_path: Path,
+        device: Union[str, torch.device] = "cuda",
+        output_path: Optional[Path] = None,
+        verbosity: int = 1,
+    ):
+        self.model_path = model_path
+        self.device = device
+        self.output_path = output_path
+        self.verbosity = verbosity
+
+        # Setup output path if specified
+        if self.output_path is not None:
+            self.output_path.mkdir(parents=True, exist_ok=True)
+
+# ===== Base Inferer ======= #
+class BaseInferenceWithSpecs:
+    """Base inference class that works with dataloader specifications"""
     def __init__(
         self,
         model: torch.nn.Module,
-        optimizer: torch.optim.Optimizer,
-        criterion: torch.nn.Module,
-        config: TrainingConfig,
-        metric_computer: Any,
-        dataloader_specs: MergedNNUNetDataLoaderSpecs,
-        output_transform: Optional[Callable] = None
+        config: InferenceConfig,
+        dataloader_specs: 'DataLoaderSpecs',
+        output_transform: Optional[Callable] = None,
+        post_process: Optional[Callable] = None
     ):
-        super().__init__(
-            model=model,
-            optimizer=optimizer,
-            criterion=criterion,
-            config=config,
-            metric_computer=metric_computer,
-            dataloader_specs=dataloader_specs
-        )
+        # Convert device string to torch.device if needed
+        self.device = (torch.device(config.device)
+                      if isinstance(config.device, str)
+                      else config.device)
+
+        self.model = model.to(self.device)
+        self.config = config
+        self.dataloader_specs = dataloader_specs
         self.output_transform = output_transform or (lambda x: x)
+        self.post_process = post_process or (lambda x: x)
+
+        # Setup output path if specified
+        if self.config.output_path is not None:
+            self.config.output_path.mkdir(parents=True, exist_ok=True)
 
     @classmethod
-    def create(
+    def from_checkpoint(
         cls,
-        model: torch.nn.Module,
-        config: TrainingConfig,
-        metric_computer: Any,
-        optimizer_config: Optional[OptimizerConfig] = None,
-        criterion_config: Optional[CriterionConfig] = None,
-        dataloader_specs: Optional[MergedNNUNetDataLoaderSpecs] = None,
-        output_transform: Optional[Callable] = None
-    ) -> 'MergedNNUNetDatasetTrainer':
-        """Factory method to create a trainer instance"""
-        optimizer_config = optimizer_config or OptimizerConfig()
-        criterion_config = criterion_config or CriterionConfig()
+        model_class: Type[torch.nn.Module],
+        model_args: Dict[str, Any],
+        config: InferenceConfig,
+        dataloader_specs: 'DataLoaderSpecs',
+        output_transform: Optional[Callable] = None,
+        post_process: Optional[Callable] = None
+    ) -> 'BaseInferenceWithSpecs':
+        """Create inference object by loading model from checkpoint"""
+        # Initialize model
+        model = model_class(**model_args)
 
-        optimizer = optimizer_config.optimizer_class(
-            model.parameters(),
-            **optimizer_config.optimizer_kwargs
-        )
-
-        criterion = criterion_config.criterion_class(
-            **criterion_config.criterion_kwargs
-        )
+        # Load weights from checkpoint
+        checkpoint = torch.load(config.model_path, map_location=config.device)
+        model.load_state_dict(checkpoint['model_state_dict'])
 
         return cls(
             model=model,
-            optimizer=optimizer,
-            criterion=criterion,
             config=config,
             dataloader_specs=dataloader_specs,
-            metric_computer=metric_computer,
-            output_transform=output_transform
+            output_transform=output_transform,
+            post_process=post_process
         )
 
-    def train(self):
-        if self.dataloader_specs.unpack_data: # from nnUNet code
-            folders_unpack = {ds.folder for ds in (
-                                self.dataloader_specs.dataset_train.get_merged_datasets() +
-                                self.dataloader_specs.dataset_val.get_merged_datasets()
-                            )}
-            super()._log(f'unpacking datasets...{folders_unpack}')
-            for folder in folders_unpack:
-                unpack_dataset(folder, unpack_segmentation=True, overwrite_existing=False, num_processes=self.dataloader_specs.num_processes, verify_npy=True)
-            self._log('unpacking done...')
+    def _log(self, message: str, level: int = 1):
+        """Log message if verbosity level is sufficient"""
+        if self.config.verbosity >= level:
+            print(message)
 
-        # call the real training
-        super().train(self.dataloader_specs.train_loader, self.dataloader_specs.val_loader)
+    def _validate_dataloader(self, dataloader: Any) -> bool:
+        """Validate dataloader meets specifications"""
+        if not hasattr(dataloader, '__iter__'):
+            return False
+        return True  # Further validation in specific implementations
 
-        # Delete unpacked .npy files after training
-        if self.dataloader_specs.cleanup_unpacked:
-            for folder in folders_unpack:
-                self._log(f"Cleaining unpacked files in {folder}")
-                for npy_file in Path(folder).rglob('*.npy'):
-                    try:
-                        os.remove(npy_file)
-                        self._log(f"Deleted file: {npy_file}")
-                    except Exception as e:
-                        self._log(f"Error deleting file {npy_file}: {e}", level=2)
+    def _process_batch(self, batch: Dict[str, Any]) -> torch.Tensor:
+        """Process a batch of data for inference - to be implemented by subclasses"""
+        raise NotImplementedError("Subclasses must implement batch processing")
 
-    def _process_batch(self, batch: Dict[str, Any]) -> tuple:
-        """Process batch from MergerNNUNetDataset format"""
-        inputs = torch.cat([
-            batch['data'],
-            batch['target']
-        ], dim=1).to(self.config.device)
+    def _save_outputs(self, outputs: List[Any], case_identifiers: List[str]):
+        """Save inference outputs"""
+        if not self.config.save_outputs or self.config.output_path is None:
+            return
 
-        labels = torch.tensor(
-            [p['test_data'] for p in batch['properties']],
-            dtype=torch.long
-        ).to(self.config.device)
+        for output, identifier in zip(outputs, case_identifiers):
+            output_file = self.config.output_path / f"{identifier}.{self.config.save_format}"
 
-        return inputs, labels
+            if self.config.save_format == "npy":
+                np.save(output_file, output)
+            elif self.config.save_format == "pt":
+                torch.save(output, output_file)
+            # Add other formats as needed
 
-    def _compute_batch_metrics(
-        self,
-        outputs: torch.Tensor,
-        labels: torch.Tensor
-    ) -> Dict[str, float]:
-        """Compute metrics for a batch"""
-        transformed_outputs = self.output_transform(outputs)
-        return self.metric_computer.compute(transformed_outputs, labels)
+            self._log(f"Saved output to {output_file}", level=2)
+
+    def run_inference(self, dataloader: Any) -> Dict[str, List[Any]]:
+        """Run inference on dataloader"""
+        if not isinstance(dataloader, Iterator):
+            dataloader = iter(dataloader)
+
+        if not self._validate_dataloader(dataloader):
+            raise ValueError("Invalid dataloader type")
+
+        self.model.eval()
+        results = {
+            'outputs': [],
+            'case_identifiers': [],
+            'metadata': []
+        }
+
+        self._log("Starting inference...")
+
+        with torch.no_grad():
+            for batch_idx, batch in enumerate(dataloader):
+                if not self.dataloader_specs.validate_batch(batch):
+                    raise ValueError(f"Invalid batch structure at index {batch_idx}")
+
+                # Extract case identifiers for saving results
+                case_identifiers = self._extract_case_identifiers(batch)
+                results['case_identifiers'].extend(case_identifiers)
+
+                # Process batch and get inputs for model
+                inputs = self._process_batch(batch)
+
+                # Run model
+                raw_outputs = self.model(inputs)
+
+                # Transform outputs if needed
+                transformed_outputs = self.output_transform(raw_outputs)
+
+                # Post-process outputs if needed
+                processed_outputs = [
+                    self.post_process(output) for output in transformed_outputs
+                ]
+
+                # Store results
+                results['outputs'].extend(processed_outputs)
+
+                # Extract any additional metadata if needed
+                metadata = self._extract_metadata(batch)
+                results['metadata'].append(metadata)
+
+                # Save outputs if configured
+                self._save_outputs(processed_outputs, case_identifiers)
+
+                self._log(f"Processed batch {batch_idx+1}", level=2)
+
+        self._log("Inference completed!")
+        return results
+
+    def _extract_case_identifiers(self, batch: Dict[str, Any]) -> List[str]:
+        """Extract case identifiers from batch - to be implemented by subclasses"""
+        raise NotImplementedError("Subclasses must implement case identifier extraction")
+
+    def _extract_metadata(self, batch: Dict[str, Any]) -> Dict[str, Any]:
+        """Extract metadata from batch - can be overridden by subclasses"""
+        return {}  # Default implementation returns empty metadata
+
+
+
+def check_preprocessing_iterator():
+    """Simple example to check what the preprocessing_iterator_fromfiles returns"""
+
+    # Update these paths to your actual data paths
+    dataset_folder = '/home/jovyan/nnunet_data/nnUNet_raw/Dataset824_FLAWS-HCO/imagesTs/'
+    test_folder = '/home/jovyan/nnunet_data/nnUNet_raw/Dataset824_FLAWS-HCO/imagesTs/'
+
+    # Find test files
+    test_files = [f for f in os.listdir(test_folder) if f.endswith('.nii.gz')][:2]  # Just use first 2 files
+
+    # Create input folders list - each item is a list of files that make up one case
+    input_folders = [[os.path.join(test_folder, f)] for f in test_files]
+
+    print(f"Found {len(input_folders)} test files")
+    for i, files in enumerate(input_folders):
+        print(f"Case {i}: {files}")
+
+    # Load plans and dataset json
+    try:
+        plans_file = os.path.join(dataset_folder, 'nnUNetPlans.json')
+        dataset_json_file = os.path.join(dataset_folder, 'dataset.json')
+
+        plans_manager = PlansManager(plans_file)
+        dataset_json = load_json(dataset_json_file)
+
+        # Get the configuration manager for 3d_fullres
+        configuration_manager = plans_manager.get_configuration('3d_fullres')
+
+        # Make sure num_processes is at least 1
+        num_processes = 1
+
+        print("\nInitializing preprocessing iterator...")
+        data_iterator = preprocessing_iterator_fromfiles(
+            list_of_lists=input_folders,
+            list_of_segs_from_prev_stage_files=None,
+            output_filenames_truncated=None,
+            plans_manager=plans_manager,
+            dataset_json=dataset_json,
+            configuration_manager=configuration_manager,
+            num_processes=num_processes,
+            pin_memory=False,  # Set to True if using CUDA
+            verbose=True
+        )
+
+        print("\nExamining first batch from iterator:")
+
+        # Get the first batch
+        first_batch = next(data_iterator)
+
+        print("Keys in batch:", list(first_batch.keys()))
+
+        # Check data
+        if isinstance(first_batch['data'], str):
+            print("Data is a file path:", first_batch['data'])
+            # Load the data to examine it
+            data = np.load(first_batch['data'])
+            print("Data shape:", data.shape)
+        else:
+            print("Data shape:", first_batch['data'].shape)
+
+        # Check properties
+        print("\nData properties keys:", list(first_batch['data_properties'].keys()))
+        if 'list_of_data_files' in first_batch['data_properties']:
+            print("Source files:", first_batch['data_properties']['list_of_data_files'])
+
+        # Get case identifier
+        case_id = os.path.basename(first_batch['data_properties'].get('list_of_data_files', ['unknown'])[0]).split('.')[0]
+        print("Case ID:", case_id)
+
+        # Try to get a second batch
+        try:
+            second_batch = next(data_iterator)
+            print("\nSecond batch successfully retrieved")
+
+            # Get case identifier for second batch
+            case_id2 = os.path.basename(second_batch['data_properties'].get('list_of_data_files', ['unknown'])[0]).split('.')[0]
+            print("Second case ID:", case_id2)
+        except StopIteration:
+            print("\nNo second batch available, iterator exhausted")
+        except Exception as e:
+            print(f"\nError getting second batch: {e}")
+
+    except Exception as e:
+        print(f"Error in preprocessing iterator setup: {e}")
+
+if __name__ == "__main__":
+    check_preprocessing_iterator()
+    print("-----run_example-----------------------")
+    run_example()

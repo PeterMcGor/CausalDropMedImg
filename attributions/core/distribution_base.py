@@ -49,20 +49,20 @@ class DistributionEstimator(ABC):
     @abstractmethod
     def estimate_performance_shift(
         self,
-        source_data: Union[Dataset, torch.Tensor, Any],
-        target_data: Union[Dataset, torch.Tensor, Any],
+        train_env_data: Union[Dataset, torch.Tensor, Any],
+        inference_env_data: Union[Dataset, torch.Tensor, Any],
         mechanisms: List[MechanismSpec],
         model: torch.nn.Module,
         metric_fn: Callable,
         **metric_kwargs
     ) -> float:
         """
-        Estimate performance shift between source and target distributions
+        Estimate performance shift between train_env and inference_env distributions
         for given mechanisms using specified metric
 
         Args:
-            source_data: Data from source distribution
-            target_data: Data from target distribution
+            train_env_data: Data from train_env distribution
+            inference_env_data: Data from inference_env distribution
             mechanisms: List of mechanisms being analyzed
             model: Model to evaluate
             metric_fn: Metric function to evaluate shift
@@ -79,29 +79,6 @@ class ImportanceSamplingEstimator(DistributionEstimator):
     def __init__(self, density_ratio_estimator: "DensityRatioEstimator"):
         super().__init__()
         self.density_ratio_estimator = density_ratio_estimator
-
-    def estimate_performance_shift(
-        self,
-        source_data: Union[Dataset, torch.Tensor, Any],
-        target_data: Union[Dataset, torch.Tensor, Any],
-        mechanisms: List[MechanismSpec],
-        model: torch.nn.Module,
-        metric_fn: Callable,
-        **metric_kwargs
-    ) -> float:
-        """Estimate performance shift using importance sampling"""
-        # Get importance weights
-        weights = self.density_ratio_estimator.estimate_ratio(
-            source_data, target_data, mechanisms)
-
-        # Compute weighted metric
-        return metric_fn(
-            model=model,
-            data=source_data,
-            weights=weights,
-            **metric_kwargs
-        )
-
 class DoCausalEstimator(DistributionEstimator):
     """Distribution estimation using do-calculus"""
 
@@ -111,8 +88,8 @@ class DoCausalEstimator(DistributionEstimator):
 
     def estimate_performance_shift(
         self,
-        source_data: Union[Dataset, torch.Tensor, Any],
-        target_data: Union[Dataset, torch.Tensor, Any],
+        train_env_data: Union[Dataset, torch.Tensor, Any],
+        inference_env_data: Union[Dataset, torch.Tensor, Any],
         mechanisms: List[MechanismSpec],
         model: torch.nn.Module,
         metric_fn: Callable,
@@ -130,8 +107,8 @@ class CounterfactualEstimator(DistributionEstimator):
 
     def estimate_performance_shift(
         self,
-        source_data: Union[Dataset, torch.Tensor, Any],
-        target_data: Union[Dataset, torch.Tensor, Any],
+        train_env_data: Union[Dataset, torch.Tensor, Any],
+        inference_env_data: Union[Dataset, torch.Tensor, Any],
         mechanisms: List[MechanismSpec],
         model: torch.nn.Module,
         metric_fn: Callable,
@@ -149,8 +126,8 @@ class GenerativeModelEstimator(DistributionEstimator):
 
     def estimate_performance_shift(
         self,
-        source_data: Union[Dataset, torch.Tensor, Any],
-        target_data: Union[Dataset, torch.Tensor, Any],
+        train_env_data: Union[Dataset, torch.Tensor, Any],
+        inference_env_data: Union[Dataset, torch.Tensor, Any],
         mechanisms: List[MechanismSpec],
         model: torch.nn.Module,
         metric_fn: Callable,
@@ -168,8 +145,8 @@ class DensityRatioEstimator(ABC):
     @abstractmethod
     def fit(
         self,
-        source_data: Union[Dataset, torch.Tensor, Any],
-        target_data: Union[Dataset, torch.Tensor, Any],
+        train_env_data: Union[Dataset, torch.Tensor, Any],
+        inference_env_data: Union[Dataset, torch.Tensor, Any],
         mechanisms: List[MechanismSpec]
     ) -> None:
         """Fit the density ratio estimator"""
@@ -178,8 +155,8 @@ class DensityRatioEstimator(ABC):
     @abstractmethod
     def estimate_ratio(
         self,
-        source_data: Union[Dataset, torch.Tensor, Any],
-        target_data: Union[Dataset, torch.Tensor, Any],
+        train_env_data: Union[Dataset, torch.Tensor, Any],
+        inference_env_data: Union[Dataset, torch.Tensor, Any],
         mechanisms: List[MechanismSpec]
     ) -> torch.Tensor:
         """Compute density ratio for given data"""

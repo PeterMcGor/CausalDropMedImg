@@ -9,7 +9,7 @@ spec:
   name: causal-shift-train{train_annotator}-test{test_annotator}
   owner: dgm-ms-brain-mri/pedro-maciasgordaliza
   description: 'Causal mechanism shift analysis from annotator {train_annotator} to annotator {test_annotator}'
-  image: dgm-ms-brain-mri/pedro-maciasgordaliza/seg_model_attr:0.0.3
+  image: dgm-ms-brain-mri/pedro-maciasgordaliza/seg_model_attr:0.0.4
   instance_type: 1xA100
   environment_variables:
     TRAIN_ANNOTATOR: "{train_annotator}"

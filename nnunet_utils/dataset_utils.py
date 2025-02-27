@@ -142,6 +142,83 @@ class MergerNNUNetDataset(nnUNetDataset):
 
         return self.subset(train_keys), self.subset(val_keys)
 
+    def stratified_split(self, split_ratio: float = 0.8, min_samples_per_group: int = 3,
+                     groupby_func=None, seed: int = 42) -> Tuple['MergerNNUNetDataset', 'MergerNNUNetDataset']:
+        """
+        Split the dataset ensuring stratification based on a grouping factor extracted from keys.
+
+        Args:
+            split_ratio: Fraction of data to use for the first split (default 0.8)
+            min_samples_per_group: Minimum number of samples per group in each split (if possible)
+            groupby_func: Function that extracts group identifier from a key. If None, will try to
+                        extract center ID from the format "*_Center_XX_*". Can be a callable function
+                        that takes a key string and returns a group identifier.
+            seed: Random seed for reproducibility (default 42)
+
+        Returns:
+            Tuple of (first_split, second_split) datasets
+        """
+        if seed is not None:
+            random.seed(seed)
+
+        # Default grouping function - tries to extract center ID
+        def default_groupby(key):
+            parts = key.split('_')
+            for i, part in enumerate(parts):
+                if part.lower() == "center" and i + 1 < len(parts):
+                    # Return prefix + "Center" + center_id
+                    return '_'.join(parts[:i+2])
+            return "unknown"  # Fallback if no center is found
+
+        # Use provided groupby function or default
+        extract_group = groupby_func if groupby_func is not None else default_groupby
+
+        # Group keys by the extracted group identifier
+        group_to_keys = {}
+        for key in self.dataset.keys():
+            group = extract_group(key)
+            if group not in group_to_keys:
+                group_to_keys[group] = []
+            group_to_keys[group].append(key)
+
+        first_split_keys = []
+        second_split_keys = []
+
+        # Process each group
+        for group, keys in group_to_keys.items():
+            # Shuffle keys within each group
+            random.shuffle(keys)
+
+            n_samples = len(keys)
+            n_first_split = int(n_samples * split_ratio)
+
+            # Try to ensure minimum samples per group in both splits if possible
+            if n_samples >= 2 * min_samples_per_group:
+                # Enough samples to meet minimum for both splits
+                if n_first_split < min_samples_per_group:
+                    n_first_split = min_samples_per_group
+                elif n_samples - n_first_split < min_samples_per_group:
+                    n_first_split = n_samples - min_samples_per_group
+            elif n_samples >= min_samples_per_group:
+                # Can only ensure minimum for one split, prioritize based on split_ratio
+                if split_ratio >= 0.5 and n_first_split < min_samples_per_group:
+                    n_first_split = min(min_samples_per_group, n_samples)
+                elif split_ratio < 0.5 and n_samples - n_first_split < min_samples_per_group:
+                    n_first_split = max(0, n_samples - min_samples_per_group)
+
+            # Add keys to respective splits
+            first_split_keys.extend(keys[:n_first_split])
+            second_split_keys.extend(keys[n_first_split:])
+
+        # Print summary of the stratification
+        #print(f"Stratified split summary:")
+        #for group, keys in group_to_keys.items():
+        #    group_keys_in_first = sum(1 for k in first_split_keys if k in keys)
+        #    group_keys_in_second = sum(1 for k in second_split_keys if k in keys)
+        #    print(f"  {group}: {len(keys)} total, {group_keys_in_first} in first split, {group_keys_in_second} in second split")
+
+        return self.subset(first_split_keys), self.subset(second_split_keys)
+
     def merge_and_split(self, dataset_to_merge: nnUNetDataset,
                         split_ratio: Union[Tuple[float, float], float] = 0.8,
                         **kwargs):
@@ -160,8 +237,8 @@ class MergerNNUNetDataset(nnUNetDataset):
 
         train_train, train_val = self.random_split(split_ratio=split_ratio[0], **kwargs)
         test_train, test_val = dataset_to_merge.random_split(split_ratio=split_ratio[1], **kwargs)
-        print(f"From the training of nnUNet for training domain classifier: {len(train_train)}, for validation: {len(train_val)}")
-        print(f"From the test of nnUNet for trainining domain classifier: {len(test_train)}, for validation {len(test_val)}")
+        #print(f"From the training of nnUNet for training domain classifier: {len(train_train)}, for validation: {len(train_val)}")
+        #print(f"From the test of nnUNet for trainining domain classifier: {len(test_train)}, for validation {len(test_val)}")
 
         # Merge training sets
         train_train.merge(test_train)

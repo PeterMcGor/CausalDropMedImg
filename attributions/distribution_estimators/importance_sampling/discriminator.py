@@ -11,7 +11,8 @@ from sklearn.base import BaseEstimator, clone
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.metrics import roc_auc_score, brier_score_loss
 
-from attributions.models.monai_binary import BinaryClassifierConfig
+from attributions.models.merge_nnunet_trainers_inferers import MergedNNUNetDataLoaderSpecs
+from attributions.models.monai_binary import BinaryClassifierConfig, BinaryMergedNNUNetTrainer, BinaryMergedNNUNetTrainerImages, MonaiBinaryClassifier, MonaiBinaryClassifierInference, MonaiBinaryClassifierInferenceImages
 from nnunet_utils.dataset_utils import MergerNNUNetDataset
 from nnunet_utils.preprocess import AnyFolderPreprocessor
 
@@ -22,6 +23,7 @@ from torch.utils.data import DataLoader, TensorDataset
 import tempfile
 from attributions.models.base_models import (
     DataLoaderSpecs,
+    InferenceConfig,
     MetricConfig,
     MetricGoal,
     TrainingConfig,
@@ -436,6 +438,7 @@ class TorchDiscriminatorRatioEstimator(DiscriminatorRatioEstimator):
             return np.column_stack([1 - probs, probs])  # Return [P(y=0), P(y=1)]
 
 
+
 class NNunetBinaryDiscriminatorRatioEstimator(DiscriminatorRatioEstimator):
     def __init__(
         self,
@@ -446,6 +449,9 @@ class NNunetBinaryDiscriminatorRatioEstimator(DiscriminatorRatioEstimator):
         imagesTr="imagesTr",
         labelsTr="labelsTr",
         num_processes: int = max(1, os.cpu_count() - 2),
+        unpack_data: bool = True,
+        batch_size:int = 4,
+        stratify_by:Union[Callable, None] = None,
         discriminator_model: BinaryClassifierConfig = None,
         optimizer_config: Optional[OptimizerConfig] = None,
         criterion_config: Optional[CriterionConfig] = None,
@@ -460,6 +466,8 @@ class NNunetBinaryDiscriminatorRatioEstimator(DiscriminatorRatioEstimator):
         self.imagesTr = imagesTr
         self.labelsTr = labelsTr
         self.num_processes = num_processes
+        self.batch_size = batch_size
+        self.stratify_by = stratify_by
         self.raw_dataset_folder = os.path.join(
             self.nnunet_folders_path, "nnUNet_raw", self.nnunet_dataset
         )
@@ -499,7 +507,7 @@ class NNunetBinaryDiscriminatorRatioEstimator(DiscriminatorRatioEstimator):
 
         if training_config is None:
             training_config = TrainingConfig(
-                num_epochs=250,
+                num_epochs=100,
                 val_interval=5,
                 num_train_iterations_per_epoch=250,  # 250
                 num_val_iterations_per_epoch=150,  # 150
@@ -509,6 +517,7 @@ class NNunetBinaryDiscriminatorRatioEstimator(DiscriminatorRatioEstimator):
                 device="cuda",
                 verbosity=1,
             )
+        self.training_config = training_config
 
         # prepare data for later trrainings anf inferences
         self.train_env_data_path, self.inference_env_data_path = (
@@ -522,62 +531,70 @@ class NNunetBinaryDiscriminatorRatioEstimator(DiscriminatorRatioEstimator):
         self.inference_env_dataset = MergerNNUNetDataset(
             self.inference_env_data_path, additional_data={"test_data": 1}
         )
+        self._create_enviroments_datasets()
 
 
 
     def _fit_mechanism_models(
         self,
-        train_env_data: Union[pd.DataFrame, np.ndarray],
-        inference_env_data: Union[pd.DataFrame, np.ndarray],
+        train_env_data: None,
+        inference_env_data: None,
         input_features: List[str],
         register_key: str,
     ) -> None:
         """Fit nnunet model discriminator for a specific mechanism"""
+        binary_config = copy.deepcopy(self.discriminator_model)
+        binary_config.num_input_channels = len(input_features)
 
-        # Create new model with adjusted input dimension
-        n_features = len(input_features)
-        original_params = self.base_model.get_init_params()
-        new_input_dim = n_features
-        new_params = (new_input_dim,) + original_params[1:]  # Adjust input_dim
-        model = self.base_model.__class__(*new_params)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        training_config = copy.deepcopy(self.training_config)
 
-        # Split data into train and validation sets
-        X_train, X_val, y_train, y_val = train_test_split(
-            X, y, test_size=0.2, random_state=42, stratify=y.numpy()
-        )
+        optimizer_config = copy.deepcopy(self.optimizer_config)
+        #mergennunet_trainer_dataloader_specs = copy.deepcopy(self.mergennunet_trainer_dataloader_specs)
 
-        # Create datasets and dataloaders
-        train_dataset = TensorDataset(X_train, y_train)
-        val_dataset = TensorDataset(X_val, y_val)
 
-        loader_specs = TorchTensorDataLoaderSpecs(
-            feature_columns=input_features, batch_size=32
-        )
-        train_loader = DataLoader(
-            train_dataset, batch_size=loader_specs.batch_size, shuffle=True
-        )
-        val_loader = DataLoader(
-            val_dataset, batch_size=loader_specs.batch_size, shuffle=False
-        )
+        if training_config.log_path is None:
+            training_config.log_path = Path(os.path.join(
+                self.result_folder, 'logs',f"{register_key}_{self.nnunet_dataset}_{timestamp}"
+            ))
+        if training_config.save_path is None:
+            training_config.save_path = Path(os.path.join(
+                self.result_folder, 'models_save', f"{register_key}_{self.nnunet_dataset}_{timestamp}"
+            ))
 
-        # Setup trainer
-        trainer = TorchTensorDiscriminatorTrainer(
-            model=model,
-            optimizer=self.optimizer_config.optimizer_class(
-                model.parameters(), **self.optimizer_config.optimizer_kwargs
-            ),
-            criterion=self.criterion_config.criterion_class(
-                **self.criterion_config.criterion_kwargs
-            ),
-            config=self.training_config,  # TODO change paths if none timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            dataloader_specs=loader_specs,
-        )
+
+        mergennunet_trainer_dataloader_specs = MergedNNUNetDataLoaderSpecs(
+            dataset_json_path=self.dataset_json_file,
+            dataset_plans_path=self.plans_file,
+            dataset_train=self.train_data,
+            dataset_val=self.val_data,
+            batch_size=self.batch_size,
+            num_processes=self.num_processes,
+            unpack_data=True,
+            cleanup_unpacked=False,
+            inference=False
+            )
+
+        if binary_config.num_input_channels == 2:
+            print("Mix trainer")
+            trainer = BinaryMergedNNUNetTrainer.create(
+                classifier_config=binary_config,
+                training_config=training_config,
+                optimizer_config=optimizer_config,
+                dataloader_specs=mergennunet_trainer_dataloader_specs
+            )
+        else: # just the images # TODO extend with mor evariables. Fututre work
+            print("Images trainer")
+            trainer = BinaryMergedNNUNetTrainerImages.create(
+                classifier_config=binary_config,
+                training_config=training_config,
+                optimizer_config=optimizer_config,
+                dataloader_specs=mergennunet_trainer_dataloader_specs
+            )
 
         # Train model
-        trainer.train(
-            train_loader, val_loader
-        )  # Using same loader for train/val for simplicity
-        self.fitted_models[register_key] = model
+        results=trainer.train()  # Using same loader for train/val for simplicity
+        self.fitted_models[register_key] = results['model_path'] # so the path to a file not the model for now
 
     def _preprocess_discriminator_data(self, output_folder: str = None):
         output_folder = tempfile.mkdtemp() if output_folder is None else output_folder
@@ -604,11 +621,81 @@ class NNunetBinaryDiscriminatorRatioEstimator(DiscriminatorRatioEstimator):
     def _create_enviroments_datasets(self, split_ratio: float = 0.65):
         n_train_env_data = len(self.train_env_dataset)
         n_inference_env_data = len(self.inference_env_dataset)
-        train_data_env_train, test_data_env_train = self.train_env_data_path.random_split(split_ratio=split_ratio)
+        if self.stratify_by is None:
+            train_data_env_train, test_data_env_train = self.train_env_dataset.random_split(split_ratio=split_ratio)
+        else:
+            train_data_env_train, test_data_env_train = self.train_env_dataset.stratified_split(split_ratio=split_ratio, min_samples_per_group=3, groupby_func=self.stratify_by)
         inference_ratio = len(train_data_env_train) / n_inference_env_data
         inference_ratio = min(inference_ratio, 1/inference_ratio)
-        train_data_env_test, test_data_env_test = self.inference_env_data_path.random_split(split_ratio=inference_ratio)
+        if self.stratify_by is None:
+            train_data_env_test, test_data_env_test = self.inference_env_dataset.random_split(split_ratio=inference_ratio)
+        else:
+            train_data_env_test, test_data_env_test = self.inference_env_dataset.stratified_split(split_ratio=inference_ratio, min_samples_per_group=3, groupby_func=self.stratify_by)
 
+        self.train_data, self.val_data = train_data_env_train.merge_and_split(train_data_env_test, split_ratio=split_ratio) # these goes to the discrimiantors
+        self.test_data_env_train = test_data_env_train # this is for transportation through weights
+        self.test_data_env_test = test_data_env_test
+        print(f"For training classifiers: From the training domain {len(train_data_env_train)}, from the development domain {len(train_data_env_test)}.")
+        print(f"From those for the trainin fo the domain classifier {len(self.train_data)}, for validation {len(self.val_data)}")
+        print(f"For shifts transportation: From the training domain {len(test_data_env_train)}, from the development domain {len(test_data_env_test)}")
+
+    def _get_probabilities(
+        self,
+        data: None,
+        variables: List[str],
+        variables_key: str,
+    ) -> np.ndarray:
+        """Get predicted probabilities from nnunet model"""
+
+        # Create inference config
+        config = InferenceConfig( # Load themodel each time, efficient for memory not for speed
+            model_path=Path(self.fitted_models[variables_key]),
+            device="cuda" if torch.cuda.is_available() else "cpu",
+            output_path=Path(os.path.join(os.path.dirname(self.fitted_models[variables_key]),'inference_results')),
+            verbosity=1
+        )
+        binary_config = copy.deepcopy(self.discriminator_model)
+        binary_config.num_input_channels = len(variables)
+
+        dataloader_specs = MergedNNUNetDataLoaderSpecs(
+            dataset_json_path=self.dataset_json_file,
+            dataset_plans_path=self.plans_file,
+            dataset_train=self.test_data_env_train,
+            dataset_val=self.test_data_env_train,
+            batch_size=self.batch_size,
+            num_processes=self.num_processes,
+            unpack_data=True,
+            inference=True
+            )
+        if binary_config.num_input_channels == 2:
+            inference_tool = MonaiBinaryClassifierInference.from_checkpoint(
+                model_class=MonaiBinaryClassifier,
+                model_args={'config': binary_config},
+                config=config,
+                dataloader_specs = dataloader_specs,
+                output_transform=torch.nn.Softmax(dim=1),
+                post_process=lambda x: x.cpu().numpy()
+            )
+        else:
+            inference_tool = MonaiBinaryClassifierInferenceImages.from_checkpoint(
+                model_class=MonaiBinaryClassifier,
+                model_args={'config': binary_config},
+                config=config,
+                dataloader_specs = dataloader_specs,
+                output_transform=torch.nn.Softmax(dim=1),
+                post_process=lambda x: x.cpu().numpy()
+            )
+        results = inference_tool.run_inference()
+        all_probabilities = []
+        # Loop through each dictionary in the data list
+        for item in results:
+            # Extract the probabilities array from each item and add it to our collection
+            all_probabilities.append(item['probabilities'])
+
+        # Combine all probability arrays into a single 2D array
+        # This will stack all the arrays vertically (along axis 0)
+        return np.vstack(all_probabilities)
+        #return np.column_stack([1 - probs, probs])  # Return [P(y=0), P(y=1)]
 
 
     def _prepare_discriminator_data(self):
@@ -617,4 +704,32 @@ class NNunetBinaryDiscriminatorRatioEstimator(DiscriminatorRatioEstimator):
 if __name__ == "__main__":
     nnunet_folders_path = '/home/jovyan/nnunet_data/'
     nnunet_dataset = 'Dataset001_MSSEG_FLAIR_Annotator1'
-    NNunetBinaryDiscriminatorRatioEstimator(nnunet_dataset=nnunet_dataset, nnunet_folders_path=nnunet_folders_path,labelsTs='labelsTs_1')
+    training_config = TrainingConfig(
+                num_epochs=2,
+                val_interval=1,
+                num_train_iterations_per_epoch=20,  # 250
+                num_val_iterations_per_epoch=10,  # 150
+                metric=MetricConfig("f1", MetricGoal.MAXIMIZE),
+                log_path=None,
+                save_path=None,
+                device="cuda",
+                verbosity=1,
+            )
+    def center_number_groupby(key):
+        parts = key.split('_')
+        for i, part in enumerate(parts):
+            if part.lower() == "center" and i + 1 < len(parts):
+                # Return just the center number
+                return parts[i+1]  # This will give "01", "07", etc.
+        return "unknown"  # Fallback if no center is found
+
+    discriminator = NNunetBinaryDiscriminatorRatioEstimator(nnunet_dataset=nnunet_dataset,
+                                                            nnunet_folders_path=nnunet_folders_path,labelsTs='labelsTs_1',
+                                                            training_config=training_config,
+                                                            stratify_by=center_number_groupby)
+    discriminator._fit_mechanism_models(None, None, ['images', 'labels'], 'images_labels')
+    discriminator._fit_mechanism_models(None, None, ['images'], 'images')
+    probs_mix = discriminator._get_probabilities(None, ['images', 'labels'], 'images_labels')
+    probs_imgs = discriminator._get_probabilities(None, ['images'], 'images')
+    print("Ratio mix", probs_mix[:,1]/probs_mix[:,0])
+    print("Ratio imgs", probs_imgs[:,1]/probs_imgs[:,0])

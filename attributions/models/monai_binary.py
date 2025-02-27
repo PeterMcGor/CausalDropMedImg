@@ -253,7 +253,7 @@ class BinaryClassificationInferenceResults:
         }
 
 
-class MonaiBinaryClassifierInference(MergedNNUNetInference):
+class MonaiBinaryClassifierInferenceAlpha(MergedNNUNetInference):
     """Specialized inference class for MONAI binary classifiers"""
 
     def __init__(
@@ -291,10 +291,15 @@ class MonaiBinaryClassifierInference(MergedNNUNetInference):
     ) -> 'MonaiBinaryClassifierInference':
         """Create binary classifier inference from checkpoint"""
         # Initialize the model
-        model = model_class(**model_args)
 
         # Load weights from checkpoint
-        checkpoint = torch.load(config.model_path, map_location=config.device)
+
+        #import numpy as np
+        #from torch.serialization import add_safe_globals
+        #add_safe_globals([np.core.multiarray.scalar])
+        checkpoint = torch.load(config.model_path, map_location=config.device, weights_only=False)
+        model = model_class(**model_args)
+
         model.load_state_dict(checkpoint['model_state_dict'])
 
         return cls(
@@ -527,6 +532,16 @@ class MonaiBinaryClassifierInference(MergedNNUNetInference):
             probability_threshold=probability_threshold,
             num_processes=num_processes               # CHANGED
         )
+
+class MonaiBinaryClassifierInferenceImages(MonaiBinaryClassifierInference):
+
+    def _process_batch(self, batch: Dict[str, Any]) -> torch.Tensor:
+        """Process batch using only batch['data'] for inputs (no target concatenation)"""
+        # Only use the data part, don't try to concatenate with target
+        inputs = batch['data'].to(self.device)
+        return inputs
+
+
 
 # Example usage
 def main():

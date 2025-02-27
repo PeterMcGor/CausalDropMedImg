@@ -41,7 +41,7 @@ class TrainingConfig:
     val_interval: int
     metric: MetricConfig
     num_train_iterations_per_epoch: int
-    num_val_iterations_per_epoch: int    
+    num_val_iterations_per_epoch: int
     save_path: Path = Path("models")
     log_path: Path = Path("logs")
     device: Union[str, torch.device] = "cuda"

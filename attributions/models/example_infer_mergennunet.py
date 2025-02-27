@@ -92,7 +92,7 @@ def run_example():
         combined_probabilities = np.vstack(all_probabilities)
 
         print(f"Combined shape: {combined_probabilities.shape}")
-        print(combined_probabilities)
+        print(combined_probabilities, combined_probabilities[:,0], combined_probabilities[:,1])
     except Exception as e:
         print(f"Error during inference: {e}")
 

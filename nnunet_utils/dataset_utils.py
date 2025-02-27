@@ -2,7 +2,7 @@ import copy
 import random
 
 
-from typing import Any, Dict, Union, List, Tuple
+from typing import Any, Callable, Dict, Union, List, Tuple
 from nnunetv2.training.dataloading.nnunet_dataset import nnUNetDataset
 
 class MergerNNUNetDataset(nnUNetDataset):
@@ -115,6 +115,22 @@ class MergerNNUNetDataset(nnUNetDataset):
 
         return new_dataset
 
+    def subset_by_pattern(self, pattern_callable: Callable[[str], bool]) -> 'MergerNNUNetDataset':
+        """
+        Create a subset of the current dataset by filtering cases using a callable function.
+
+        Args:
+            pattern_callable: A function that takes a case identifier and returns True if
+                            the case should be included in the subset, False otherwise.
+
+        Returns:
+            A new MergerNNUNetDataset instance with only the cases that match the pattern
+        """
+        # Find all case identifiers that match the pattern
+        matching_cases = [case_id for case_id in self.dataset.keys() if pattern_callable(case_id)]
+
+        # Use the existing subset method to create the filtered dataset
+        return self.subset(matching_cases)
 
     def random_split(self, split_ratio: float = 0.8, shuffle: bool = True, seed: int = 42) -> Tuple['MergerNNUNetDataset', 'MergerNNUNetDataset']:
         """

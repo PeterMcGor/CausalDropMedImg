@@ -249,7 +249,7 @@ class MergedNNUNetInference:
                 # Get data properties and case information
                 properties = preprocessed['keys']
                 case_id = properties#os.path.basename(properties.get('list_of_data_files', ['unknown'])[0]).split('.')[0]
-                print(f"Processing batch {batch_idx}, case: {case_id}")
+                #print(f"Processing batch {batch_idx}, case: {case_id}")
 
 
                 # Process batch for binary classification (combine data and target channels)
@@ -279,7 +279,7 @@ class MergedNNUNetInference:
                 }
                 results.append(case_result)
 
-                print(f"Finished case {case_id}. Prediction: {predictions}")
+                #print(f"Finished case {case_id}. Prediction: {predictions}")
 
                 # Save results if output path is specified
                 if self.config.output_path:
@@ -289,9 +289,9 @@ class MergedNNUNetInference:
                         prediction=predictions,
                         probabilities=probabilities
                     )
-                    print(f"Results saved to {output_file}")
+                    #print(f"Results saved to {output_file}")
 
-        print(f"Inference completed for {len(results)} cases")
+        #print(f"Inference completed for {len(results)} cases")
         return results
 
 

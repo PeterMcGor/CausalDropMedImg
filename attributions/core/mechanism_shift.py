@@ -8,6 +8,8 @@ import networkx as nx
 from dowhy import gcm
 from torch.utils.data import Dataset
 
+from attributions.core.metrics.metrics import compute_weighted_metrics_merged_dataset
+
 from .distribution_base import DistributionEstimator, MechanismSpec
 from dowhy.gcm import shapley
 
@@ -32,7 +34,7 @@ class CausalMechanismShift:
         """
         self.distribution_estimator = distribution_estimator
         self.graph = causal_graph
-        self.shapley_config = shapley_config or shapley.ShapleyConfig()
+        self.shapley_config = shapley_config or shapley.ShapleyConfig(n_jobs=1)
 
         # Extract mechanisms from graph
         self.mechanisms = self._extract_mechanisms_from_graph()
@@ -186,3 +188,84 @@ class CausalMechanismShift:
             blanket.remove(node)
 
         return blanket
+
+class CausalMechanismShiftMed(CausalMechanismShift):
+    def analyze_shift(
+        self,
+        train_env_data: Union[Dataset, torch.Tensor, Any],
+        inference_env_data: Union[Dataset, torch.Tensor, Any],
+        csv_data:str,
+        measure=['F1_score'],
+        estimator=None
+    ) -> Dict[str, float]:
+        """Analyze performance shift and attribute to mechanisms using Shapley values.
+
+        Args:
+            train_env_data: Data from train_env distribution
+            inference_env_data: Data from inference_env distribution
+            metric_fn: Metric to measure performance
+            metric_kwargs: Additional metric arguments
+
+        Returns:
+            Dictionary mapping mechanism names to their Shapley values
+        """
+        # Define set function for Shapley calculation
+        def mechanism_value_function(mechanism_mask: np.ndarray) -> float:
+            """Value function v(S) for Shapley calculation"""
+            # Get mechanisms corresponding to 1s in mask
+            shifted = [m for i, m in enumerate(self.mechanisms) if mechanism_mask[i]]
+
+            # Compute value when these mechanisms shift
+            return self._compute_mechanism_shift_value(
+                shifted, train_env_data, inference_env_data,
+                csv_data, measure, estimator=estimator
+            )
+
+        # I need the change in performance repsect to the baseline as shapely value
+        # Performing this here is not need to do it each timeI want to measure a change
+        self.baseline_performance = compute_weighted_metrics_merged_dataset(csv_data, train_env_data, measures=measure)
+
+        # Compute Shapley values using dowhy implementation
+        shapley_values = shapley.estimate_shapley_values(
+            set_func=mechanism_value_function,
+            num_players=len(self.mechanisms),
+            shapley_config=self.shapley_config
+        )
+
+        # Map values back to mechanism names
+        return {
+            mech.name: value
+            for mech, value in zip(self.mechanisms, shapley_values)
+        }
+
+
+    def _compute_mechanism_shift_value(
+        self,
+        shifted_mechanisms: List[MechanismSpec],
+        train_env_data: Union[Dataset, torch.Tensor, Any],
+        inference_env_data: Union[Dataset, torch.Tensor, Any],
+        csv_data:str,
+        measure=['F1_score'],
+        estimator = None,
+    ) -> float:
+        """Compute performance change when only the specified mechanisms shift.
+
+        This implements v(S) in the Shapley formula, representing the value when
+        mechanisms S shift from train_env to inference_env distribution while others remain
+        at train_env distribution.
+        """
+        # Ensure mechanisms follow causal ordering
+        #ordered_mechanisms = self._order_mechanisms_topologically(shifted_mechanisms)
+        weights = estimator.estimate_ratio(
+            train_env_dat=train_env_data,
+            inference_env_data=inference_env_data,
+            mechanisms=shifted_mechanisms,
+        )
+        shifted_perf = compute_weighted_metrics_merged_dataset(csv_data, train_env_data, measures=measure, weights=weights)
+
+        # Debug prints
+        #print(f"\nMechanisms: {[m.name for m in shifted_mechanisms]}")
+        #print(f"train_env perf: {train_env_perf:.4f}, Shifted perf: {shifted_perf:.4f}")
+        print(f"Performance change: {shifted_perf - self.baseline_performance:.4f}")
+
+        return shifted_perf - self.baseline_performance

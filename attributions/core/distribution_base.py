@@ -19,7 +19,7 @@ class MechanismSpec:
     name: str
     variables: List[str]
     parents: Optional[List[str]] = None
-    separator: str = ','
+    separator: str = '_'
 
     def __post_init__(self):
         """Ensures instance variables are properly initialized."""

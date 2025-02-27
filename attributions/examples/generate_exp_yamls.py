@@ -20,7 +20,7 @@ spec:
     N_JOBS: "1"
     SHAPLEY_SAMPLES: "500"
   working_directory: /home/jovyan/workspace/CausalDropMedImg
-  command: 'python attributions/examples/medical_image_call.py --train_annotator {train_annotator} --test_annotator {test_annotator} --nnunet_folders_path $NNUNET_FOLDERS_PATH --num_epochs $NUM_EPOCHS --device $DEVICE --n_jobs $N_JOBS --shapley_samples $SHAPLEY_SAMPLES && sc stop job causal-shift-train{train_annotator}-test{test_annotator}'
+  command: 'git pull origin main && python attributions/examples/medical_image_call.py --train_annotator {train_annotator} --test_annotator {test_annotator} --nnunet_folders_path $NNUNET_FOLDERS_PATH --num_epochs $NUM_EPOCHS --device $DEVICE --n_jobs $N_JOBS --shapley_samples $SHAPLEY_SAMPLES && sc stop job causal-shift-train{train_annotator}-test{test_annotator}'
   scale: 1
   use_spot_instance: false
   schedule: null

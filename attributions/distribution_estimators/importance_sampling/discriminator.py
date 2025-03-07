@@ -11,6 +11,8 @@ from sklearn.base import BaseEstimator, clone
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.metrics import roc_auc_score, brier_score_loss
 
+from attributions.utils import get_available_cpus
+
 from attributions.models.merge_nnunet_trainers_inferers import (
     MergedNNUNetDataLoaderSpecs,
 )
@@ -456,7 +458,7 @@ class NNunetBinaryDiscriminatorRatioEstimator(DiscriminatorRatioEstimator):
         labelsTs="labelsTs",
         imagesTr="imagesTr",
         labelsTr="labelsTr",
-        num_processes: int = max(1, os.cpu_count() - 2),
+        num_processes: int = None,
         unpack_data: bool = True,
         batch_size: int = 4,
         stratify_by: Union[Callable, None] = None,
@@ -473,7 +475,7 @@ class NNunetBinaryDiscriminatorRatioEstimator(DiscriminatorRatioEstimator):
         self.labelsTs = labelsTs
         self.imagesTr = imagesTr
         self.labelsTr = labelsTr
-        self.num_processes = num_processes
+        self.num_processes = num_processes if num_processes is not None else get_available_cpus()
         self.batch_size = batch_size
         self.stratify_by = stratify_by
         self.raw_dataset_folder = os.path.join(
@@ -757,7 +759,7 @@ class FlexibleNNunetBinaryDiscriminatorRatioEstimator(DiscriminatorRatioEstimato
         clip_probabilities: Optional[float] = None,
         clip_ratios: Optional[float] = None,
         batch_size: int = 4,
-        num_processes: int = max(1, os.cpu_count() - 2),
+        num_processes: int = None,
         stratify_by: Union[Callable, None] = None,
         # Path-based approach (like original)
         nnunet_folders_path: Optional[str] = None,
@@ -783,7 +785,7 @@ class FlexibleNNunetBinaryDiscriminatorRatioEstimator(DiscriminatorRatioEstimato
     ):
         # Store basic configuration
         self.batch_size = batch_size
-        self.num_processes = num_processes
+        self.num_processes = num_processes if num_processes is not None else get_available_cpus()
         self.stratify_by = stratify_by
         self.train_val_split_ratio = train_val_split_ratio
 

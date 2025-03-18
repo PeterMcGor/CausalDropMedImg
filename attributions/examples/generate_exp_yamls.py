@@ -15,7 +15,7 @@ spec:
     TRAIN_ANNOTATOR: "{train_annotator}"
     TEST_ANNOTATOR: "{test_annotator}"
     NNUNET_FOLDERS_PATH: "/home/jovyan/shared/pedro-maciasgordaliza/ms-data/nnunet_folders"
-    NUM_EPOCHS: "1"
+    NUM_EPOCHS: "50"
     DEVICE: "cuda"
     N_JOBS: "1"
     SHAPLEY_SAMPLES: "500"

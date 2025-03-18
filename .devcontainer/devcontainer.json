@@ -31,7 +31,9 @@
 
     "runArgs": [
         "--gpus", "all",
-        "--shm-size", "18gb"
+        "--shm-size", "24gb",
+        "--memory", "45g",
+        "--memory-swap", "45g"
     ],
 
     "mounts": [
@@ -63,11 +65,12 @@
 
     "remoteUser": "jovyan",
 
-    "postCreateCommand": "pip install black pylint pytest",
+    "postCreateCommand": "pip install black pylint pytest psutil",
 
     "containerEnv": {
         "NVIDIA_VISIBLE_DEVICES": "all",
         "NVIDIA_DRIVER_CAPABILITIES": "compute,utility",
-        "PYTHONUNBUFFERED": "1"
+        "PYTHONUNBUFFERED": "1",
+        "PYTORCH_CUDA_ALLOC_CONF": "max_split_size_mb:128"
     }
 }

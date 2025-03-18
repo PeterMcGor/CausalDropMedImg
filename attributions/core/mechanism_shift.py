@@ -9,8 +9,9 @@ from dowhy import gcm
 from torch.utils.data import Dataset
 
 from attributions.core.metrics.metrics import compute_weighted_metrics_merged_dataset
+from attributions.models.base_models import MetricConfig, MetricGoal
 
-from .distribution_base import DistributionEstimator, MechanismSpec
+from attributions.core.distribution_base import DistributionEstimator, MechanismSpec
 from dowhy.gcm import shapley
 
 
@@ -25,6 +26,7 @@ class CausalMechanismShift:
         distribution_estimator: DistributionEstimator,
         causal_graph: nx.DiGraph,
         shapley_config: Optional[shapley.ShapleyConfig] = None,
+        metric_goal: MetricGoal = MetricGoal.MAXIMIZE,
     ):
         """
         Args:
@@ -39,6 +41,7 @@ class CausalMechanismShift:
         # Extract mechanisms from graph
         self.mechanisms = self._extract_mechanisms_from_graph()
         self.baseline_performance = None
+        self.metric_goal = metric_goal
 
     # TODO Mechanism doesntlook a good name her esince normally the mechanism is directly the function conecting the nodes
     def _extract_mechanisms_from_graph(self) -> List[MechanismSpec]:
@@ -55,7 +58,7 @@ class CausalMechanismShift:
             )
         return mechanisms
 
-    def _compute_mechanism_shift_value(
+    def _compute_permutation_shift_value(
         self,
         shifted_mechanisms: List[MechanismSpec],
         train_env_data: Union[Dataset, torch.Tensor, Any],
@@ -81,12 +84,12 @@ class CausalMechanismShift:
             metric_fn=metric_fn,
             **metric_kwargs
         )
-        # Debug prints
-        #print(f"\nMechanisms: {[m.name for m in shifted_mechanisms]}")
-        #print(f"train_env perf: {train_env_perf:.4f}, Shifted perf: {shifted_perf:.4f}")
-        print(f"Performance change: {shifted_perf - self.baseline_performance:.4f}")
 
-        return shifted_perf - self.baseline_performance
+        performance_shift = shifted_perf - self.baseline_performance if self.metric_goal == MetricGoal.MINIMIZE else self.baseline_performance - shifted_perf
+
+        print(f"Performance change: {performance_shift:.4f}")
+
+        return performance_shift
 
     def _order_mechanisms_topologically(
         self,
@@ -133,7 +136,7 @@ class CausalMechanismShift:
             shifted = [m for i, m in enumerate(self.mechanisms) if mechanism_mask[i]]
 
             # Compute value when these mechanisms shift
-            return self._compute_mechanism_shift_value(
+            return self._compute_permutation_shift_value(
                 shifted, train_env_data, inference_env_data,
                 model, metric_fn, **metric_kwargs
             )
@@ -195,7 +198,7 @@ class CausalMechanismShiftMed(CausalMechanismShift):
         train_env_data: Union[Dataset, torch.Tensor, Any],
         inference_env_data: Union[Dataset, torch.Tensor, Any],
         csv_data:str,
-        measure=['F1_score'],
+        measure=MetricConfig('F1_score', MetricGoal.MAXIMIZE),
         estimator=None
     ) -> Dict[str, float]:
         """Analyze performance shift and attribute to mechanisms using Shapley values.
@@ -209,6 +212,7 @@ class CausalMechanismShiftMed(CausalMechanismShift):
         Returns:
             Dictionary mapping mechanism names to their Shapley values
         """
+        self.metric_goal = measure.goal
         # Define set function for Shapley calculation
         def mechanism_value_function(mechanism_mask: np.ndarray) -> float:
             """Value function v(S) for Shapley calculation"""
@@ -216,14 +220,14 @@ class CausalMechanismShiftMed(CausalMechanismShift):
             shifted = [m for i, m in enumerate(self.mechanisms) if mechanism_mask[i]]
 
             # Compute value when these mechanisms shift
-            return self._compute_mechanism_shift_value(
+            return self._compute_permutation_shift_value(
                 shifted, train_env_data, inference_env_data,
-                csv_data, measure, estimator=estimator
+                csv_data, [measure.name], estimator=estimator
             )
 
         # I need the change in performance repsect to the baseline as shapely value
         # Performing this here is not need to do it each timeI want to measure a change
-        self.baseline_performance = compute_weighted_metrics_merged_dataset(csv_data, train_env_data, measures=measure)
+        self.baseline_performance = compute_weighted_metrics_merged_dataset(csv_data, train_env_data, measures=[measure.name])
 
         # Compute Shapley values using dowhy implementation
         shapley_values = shapley.estimate_shapley_values(
@@ -239,7 +243,7 @@ class CausalMechanismShiftMed(CausalMechanismShift):
         }
 
 
-    def _compute_mechanism_shift_value(
+    def _compute_permutation_shift_value(
         self,
         shifted_mechanisms: List[MechanismSpec],
         train_env_data: Union[Dataset, torch.Tensor, Any],
@@ -261,11 +265,12 @@ class CausalMechanismShiftMed(CausalMechanismShift):
             inference_env_data=inference_env_data,
             mechanisms=shifted_mechanisms,
         )
+        # TODO check this weights
         shifted_perf = compute_weighted_metrics_merged_dataset(csv_data, train_env_data, measures=measure, weights=weights)
 
         # Debug prints
         #print(f"\nMechanisms: {[m.name for m in shifted_mechanisms]}")
         #print(f"train_env perf: {train_env_perf:.4f}, Shifted perf: {shifted_perf:.4f}")
-        print(f"Performance change: {shifted_perf - self.baseline_performance:.4f}")
-
-        return shifted_perf - self.baseline_performance
+        performance_shift = shifted_perf - self.baseline_performance if self.metric_goal == MetricGoal.MINIMIZE else self.baseline_performance - shifted_perf
+        print(f"Performance change: {performance_shift:.4f}")
+        return performance_shift

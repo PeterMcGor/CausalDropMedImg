@@ -44,6 +44,8 @@ class MergerNNUNetDataset(nnUNetDataset):
         # Add additional data to each case in the merged dataset
 
         if self.additional_data is not None:
+            self.extend_dataset(self.additional_data, self.DATASET_INFO)
+            """
             for case_id in self.dataset.keys():
                 processed_data = {}
                 for key, value in self.additional_data.items():
@@ -52,8 +54,9 @@ class MergerNNUNetDataset(nnUNetDataset):
                     else:
                         processed_data[key] = value
                 self.dataset[case_id][self.DATASET_INFO] = processed_data
+            """
 
-    def merge(self, dataset: nnUNetDataset) -> None:
+    def merge(self, dataset: nnUNetDataset, check_conflicting_cases = True) -> None:
         """
         Merge another nnUNetDataset into this one.
 
@@ -68,12 +71,13 @@ class MergerNNUNetDataset(nnUNetDataset):
             raise TypeError(f'Dataset must be an instance of nnUNetDataset, got {type(dataset)}')
 
         # Check for conflicting case identifiers
-        conflicting_cases = set(self.dataset.keys()) & set(dataset.dataset.keys())
-        if conflicting_cases:
-            raise ValueError(
-                f'Found conflicting case identifiers in datasets: {conflicting_cases}. '
-                'Cannot merge datasets with duplicate cases.'
-            )
+        if check_conflicting_cases:
+            conflicting_cases = set(self.dataset.keys()) & set(dataset.dataset.keys())
+            if conflicting_cases:
+                raise ValueError(
+                    f'Found conflicting case identifiers in datasets: {conflicting_cases}. '
+                    'Cannot merge datasets with duplicate cases.'
+                )
 
         # Store reference to merged dataset
         if len(self._merged_datasets) == 0:
@@ -82,7 +86,6 @@ class MergerNNUNetDataset(nnUNetDataset):
 
         # Merge the datasets
         self.dataset.update(dataset.dataset) # case_identifiers this is essential
-        #self.additional_data.update(dataset.additional_data)
 
     def load_case(self, key):
         data, seg, properties = super().load_case(key)
@@ -236,13 +239,15 @@ class MergerNNUNetDataset(nnUNetDataset):
         return self.subset(first_split_keys), self.subset(second_split_keys)
 
     def merge_and_split(self, dataset_to_merge: nnUNetDataset,
-                        split_ratio: Union[Tuple[float, float], float] = 0.8,
-                        **kwargs):
+                        split_ratio: Union[Tuple[float, float], float] = 0.8,  shuffle: bool = True,
+                    seed: int = 42,
+                        **merge_kwargs):
 
         """
         Create training and validation datasets by:
         1. Splitting each folder into train/val
         2. Merging the train portions and val portions separately
+        Important: Even not checking for conflics when the dict updates with the new dataset just unique keys will be kept.
 
         returns:  Tuple[MergerNNUNetDataset, MergerNNUNetDataset]
         """
@@ -251,14 +256,12 @@ class MergerNNUNetDataset(nnUNetDataset):
         if isinstance(split_ratio, float):
             split_ratio = (split_ratio, split_ratio)
 
-        train_train, train_val = self.random_split(split_ratio=split_ratio[0], **kwargs)
-        test_train, test_val = dataset_to_merge.random_split(split_ratio=split_ratio[1], **kwargs)
-        #print(f"From the training of nnUNet for training domain classifier: {len(train_train)}, for validation: {len(train_val)}")
-        #print(f"From the test of nnUNet for trainining domain classifier: {len(test_train)}, for validation {len(test_val)}")
+        train_train, train_val = self.random_split(split_ratio=split_ratio[0],  shuffle=shuffle, seed=seed)
+        test_train, test_val = dataset_to_merge.random_split(split_ratio=split_ratio[1],  shuffle=shuffle, seed=seed)
 
         # Merge training sets
-        train_train.merge(test_train)
-        train_val.merge(test_val)
+        train_train.merge(test_train,**merge_kwargs)
+        train_val.merge(test_val,**merge_kwargs)
 
         return train_train, train_val
 
@@ -271,6 +274,33 @@ class MergerNNUNetDataset(nnUNetDataset):
         """
         return self._merged_datasets
 
+    def extend_dataset(self, additional_data: Dict[str, Any], additional_data_key:str) -> None: # TODO for specific case_id
+        for case_id in self.dataset.keys():
+            processed_data = {}
+            for key, value in additional_data.items():
+                if callable(value):
+                    processed_data[key] = value(case_id, super())
+                else:
+                    processed_data[key] = value
+            self.dataset[case_id][additional_data_key] = processed_data
+
+    def extract_per_case_id(self, key: str) -> Dict[str,Any]:
+        return {case_id:self[case_id][key] for case_id in self.dataset.keys()}
+
+    def transform_keys(self, key_transform_function):
+        """
+        Creates a new dictionary with transformed keys but same values.
+
+        Args:
+            original_dict: The dictionary to transform
+            key_transform_function: A function that takes a key and returns a new key
+
+        Returns:
+            A new dictionary with transformed keys
+        """
+        self.dataset = {key_transform_function(key): value for key, value in self.dataset.items()}
+
+
     def __str__(self) -> str:
         """
         String representation of the merged dataset.
@@ -282,3 +312,4 @@ class MergerNNUNetDataset(nnUNetDataset):
             f'MergerNNUNetDataset with {len(self)} total cases, '
             f'merged from {len(self._merged_datasets) + 1} datasets'
         )
+

@@ -1,3 +1,4 @@
+import gc
 import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -16,6 +17,8 @@ import tqdm
 from nnunetv2.inference.data_iterators import preprocessing_iterator_fromfiles
 from nnunet_utils.dataset_utils import MergerNNUNetDataset
 from batchgenerators.utilities.file_and_folder_operations import load_json
+
+from attributions.utils import get_available_cpus
 
 
 # ===== Configuration Classes =====
@@ -46,12 +49,16 @@ class TrainingConfig:
     log_path: Path = Path("logs")
     device: Union[str, torch.device] = "cuda"
     verbosity: int = 1
+    exp_name:str = "exp"
 
 @dataclass
 class OptimizerConfig:
     """Configuration for optimizer"""
     optimizer_class: Type[torch.optim.Optimizer] = torch.optim.Adam
     optimizer_kwargs: Dict[str, Any] = field(default_factory=lambda: {'lr': 1e-4})
+
+    def __post_init__(self):
+        self.name = self.optimizer_class.__name__
 
 @dataclass
 class CriterionConfig:
@@ -68,13 +75,13 @@ class DataLoaderSpecs:
         dataset_type: Union[Type, Tuple[Type, ...]],
         batch_keys: list[str],
         batch_size: int = 2,
-        num_processes: int = max(1, os.cpu_count() - 2)
+        num_processes: int = None
     ):
         self.loader_type = loader_type
         self.dataset_type = dataset_type
         self.batch_keys = batch_keys
         self.batch_size = batch_size
-        self.num_processes = num_processes
+        self.num_processes = num_processes if num_processes is not None else get_available_cpus()
 
     def validate_loader(self, loader: Any) -> bool:
         """Validate that loader meets specifications"""
@@ -210,6 +217,17 @@ class BaseTrainerWithSpecs(ABC):
 
         return avg_loss
 
+    # Add to BaseTrainerWithSpecs class
+    def _move_batch_to_device(self, batch_data):
+        """Move all tensors in batch to device efficiently"""
+        if isinstance(batch_data, torch.Tensor):
+            return batch_data.to(self.device, non_blocking=True)
+        elif isinstance(batch_data, dict):
+            return {k: self._move_batch_to_device(v) for k, v in batch_data.items()}
+        elif isinstance(batch_data, list):
+            return [self._move_batch_to_device(item) for item in batch_data]
+        return batch_data
+
     def validate(self, val_loader: Any, epoch: int) -> Dict[str, float]:
         if not isinstance(val_loader, Iterator):
             val_loader = iter(val_loader)
@@ -231,7 +249,9 @@ class BaseTrainerWithSpecs(ABC):
                 # Ensure device consistency
                 # self._ensure_device_consistency(inputs)
                 outputs = self.model(inputs)
+                loss_val = self.criterion(outputs, labels)
                 batch_metrics = self._compute_batch_metrics(outputs, labels)
+                batch_metrics['loss'] = loss_val.item()
 
                 for key, value in batch_metrics.items():
                     metrics_sum[key] = metrics_sum.get(key, 0) + value
@@ -242,11 +262,13 @@ class BaseTrainerWithSpecs(ABC):
             for key, value in metrics_sum.items()
         }
 
-        self.writer.add_scalar(
-            f'Metric/{self.config.metric.name}',
-            metrics_avg[self.config.metric.name],
-            epoch
-        )
+        for key, value in metrics_avg.items():
+            self.writer.add_scalar(f'Metric/{key}', value, epoch)
+        #self.writer.add_scalar(
+        #    f'Metric/{self.config.metric.name}',
+        #    metrics_avg[self.config.metric.name],
+        #    epoch
+        #)
 
         # Detailed validation logging
         if self.config.verbosity >= 2:
@@ -281,39 +303,55 @@ class BaseTrainerWithSpecs(ABC):
         self._log(f"Model will be saved to: {self.config.save_path}")
         self._log(f"Tensorboard logs will be saved to: {self.config.log_path}")
 
-        for epoch in range(self.config.num_epochs):
-            train_loss = self.train_epoch(train_loader, epoch)
+        try:
 
-            if (epoch + 1) % self.config.val_interval == 0:
-                metrics = self.validate(val_loader, epoch)
-                self.save_checkpoint(metrics, epoch)
+            for epoch in range(self.config.num_epochs):
+                # Clear cache periodically
+                if epoch % 2 == 0:
+                    torch.cuda.empty_cache()
+                    gc.collect()
 
-                if self.config.verbosity >= 1:
-                    self._log(
-                        f"Epoch {epoch + 1}: "
-                        f"loss = {train_loss:.4f}, "
-                        f"{self.config.metric.name} = {metrics[self.config.metric.name]:.4f}"
-                    )
-                    if metrics[self.config.metric.name] == self.best_metric_value:
-                        self._log("New best model saved!")
+                train_loss = self.train_epoch(train_loader, epoch)
+
+                if (epoch + 1) % self.config.val_interval == 0:
+                    metrics = self.validate(val_loader, epoch)
+
+                    # Clear cache after validation too
+                    torch.cuda.empty_cache()
+                    gc.collect()
+                    self.save_checkpoint(metrics, epoch)
+
+                    if self.config.verbosity >= 1:
+                        self._log(
+                            f"Epoch {epoch + 1}: "
+                            f"loss = {train_loss:.4f}, "
+                            f"{self.config.metric.name} = {metrics[self.config.metric.name]:.4f}"
+                        )
+                        if metrics[self.config.metric.name] == self.best_metric_value:
+                            self._log("New best model saved!")
 
 
-        final_report = {
-            'best_epoch': self.best_epoch,
-            'best_metric': {
-                self.config.metric.name: self.best_metric_value
-            },
-            'model_path': str(self.config.save_path / 'best_model.pth')
-        }
+            final_report = {
+                'best_epoch': self.best_epoch,
+                'best_metric': {
+                    self.config.metric.name: self.best_metric_value
+                },
+                'model_path': str(self.config.save_path / 'best_model.pth')
+            }
 
 
-        self._log("\nTraining completed!")
-        self._log(f"Best {self.config.metric.name}: {self.best_metric_value:.4f} at epoch {self.best_epoch}")
-        self._log(f"Model saved at: {final_report['model_path']}")
-        self._log(f"To view training curves, run: tensorboard --logdir {self.config.log_path}")
+            self._log("\nTraining completed!")
+            self._log(f"Best {self.config.metric.name}: {self.best_metric_value:.4f} at epoch {self.best_epoch}")
+            self._log(f"Model saved at: {final_report['model_path']}")
+            self._log(f"To view training curves, run: tensorboard --logdir {self.config.log_path}")
 
-        self.writer.close()
-        return final_report
+            self.writer.close()
+            return final_report
+        finally:
+            self.writer.close()
+            torch.cuda.empty_cache()
+            gc.collect()
+
 
 @dataclass
 class InferenceConfig:

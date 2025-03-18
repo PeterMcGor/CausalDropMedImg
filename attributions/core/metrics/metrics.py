@@ -1,4 +1,3 @@
-
 from sklearn.metrics import brier_score_loss
 import torch
 import pandas as pd
@@ -17,7 +16,7 @@ def compute_brier(model, data, weights=None, subset_cols=None, return_average=Tr
         probs = model.predict_proba(X)[:, 1]
 
         if not return_average:
-             return (probs - y)**2
+            return (probs - y) ** 2
 
         # Compute weighted Brier score
         if weights is not None:
@@ -25,9 +24,11 @@ def compute_brier(model, data, weights=None, subset_cols=None, return_average=Tr
         return brier_score_loss(y, probs)
 
         # 3. Define metric function
+
+
 def compute_accuracy(model, data, weights=None):
-    x = torch.tensor(data[['X1', 'X2', 'X3']].values, dtype=torch.float32)
-    y = torch.tensor(data['Y'].values, dtype=torch.float32)
+    x = torch.tensor(data[["X1", "X2", "X3"]].values, dtype=torch.float32)
+    y = torch.tensor(data["Y"].values, dtype=torch.float32)
     outputs = model(x).squeeze()
     preds = (outputs >= 0.5).float()
 
@@ -36,9 +37,16 @@ def compute_accuracy(model, data, weights=None):
         correct = (preds == y).float() * weights
         return (correct.sum() / weights.sum()).item()
     else:
-         return (preds == y).float().mean().item()
+        return (preds == y).float().mean().item()
 
-def compute_weighted_metrics(data, case_col='id', weights=None, measures=None, subset_subjects=None, return_average=True):
+def compute_weighted_metrics(
+    data,
+    case_col="id",
+    weights=None,
+    measures=None,
+    subset_subjects=None,
+    return_average=True,
+):
     """
     Compute weighted averages of metrics across subjects.
 
@@ -79,19 +87,43 @@ def compute_weighted_metrics(data, case_col='id', weights=None, measures=None, s
     if subset_subjects is not None:
         df = df[df[case_col].isin(subset_subjects)]
 
+    # Get unique case values in the data
+    unique_cases = set(df[case_col].dropna().unique())
+
+    # If no weights provided, use equal weights for all subjects
+    if weights is None:
+        weights = {id_val: 1.0 for id_val in unique_cases}
+
+    # Check if all weights keys have corresponding values in the case_col
+    if weights is not None:
+        missing_keys = [key for key in weights.keys() if key not in unique_cases]
+        if missing_keys:
+            raise ValueError(
+                f"The following keys in the weights dictionary do not have corresponding values "
+                f"in the {case_col} column: {missing_keys}"
+            )
+
+        # Check for duplicate keys in the data
+        value_counts = df[case_col].value_counts()
+        duplicate_keys = [key for key in weights.keys() if key in value_counts.index and value_counts[key] > 1]
+        if duplicate_keys:
+            raise ValueError(
+                f"The following keys in the weights dictionary appear multiple times "
+                f"in the {case_col} column: {duplicate_keys}. Each key should be unique."
+            )
+
     # If no measures specified, use all numeric columns except known non-measure columns
     if measures is None:
-        exclude_cols = ['id', case_col, 'ref', 'dataset', 'labelsTs']
-        measures = [col for col in df.columns if col not in exclude_cols and pd.api.types.is_numeric_dtype(df[col])]
+        exclude_cols = ["id", case_col, "ref", "dataset", "labelsTs"]
+        measures = [
+            col
+            for col in df.columns
+            if col not in exclude_cols and pd.api.types.is_numeric_dtype(df[col])
+        ]
 
     # If not returning average, return the raw measure values
     if not return_average:
         return df[measures].values
-
-    # If no weights provided, use equal weights for all subjects
-    if weights is None:
-        unique_ids = df[case_col].dropna().unique()
-        weights = {id_val: 1.0 for id_val in unique_ids}
 
     # Initialize results dictionary
     results = {}
@@ -110,11 +142,11 @@ def compute_weighted_metrics(data, case_col='id', weights=None, measures=None, s
             continue
 
         # Add weight column based on case_col value
-        valid_data['weight'] = valid_data[case_col].map(lambda x: weights.get(x, 0))
+        valid_data["weight"] = valid_data[case_col].map(lambda x: weights.get(x, 0))
 
         # Calculate weighted sum and sum of weights for valid data
-        weighted_sum = (valid_data[measure] * valid_data['weight']).sum()
-        sum_of_weights = valid_data['weight'].sum()
+        weighted_sum = (valid_data[measure] * valid_data["weight"]).sum()
+        sum_of_weights = valid_data["weight"].sum()
 
         # Avoid division by zero
         if sum_of_weights > 0:
@@ -126,120 +158,73 @@ def compute_weighted_metrics(data, case_col='id', weights=None, measures=None, s
         return results[measures[0]]
     return results
 
-def compute_weighted_metrics_merged_dataset(data, merged_dataset, case_col='id', weights=None, measures=None, subset_subjects=None, return_average=True):
-    dict_keys = merged_dataset.keys()
-    if weights is None:
-        weights = [1.0] * len(dict_keys)
-    weights_dict =  {k+'.nii':weights[i] for i,k in enumerate(dict_keys)}
-    return compute_weighted_metrics(data, case_col='id', weights=weights_dict , measures=measures, subset_subjects=subset_subjects, return_average=return_average)
 
+def compute_weighted_metrics_merged_dataset(
+    data,
+    merged_dataset=None,
+    case_col="id",
+    weights=None,
+    measures=None,
+    subset_subjects=None,
+    return_average=True,
+    key_transform=lambda k: k + ".nii",
+):
+    """
+    Compute weighted metrics using either a provided weights dictionary or creating one from merged_dataset.
 
-if __name__ == "__main__":
-    # Create a mock DataFrame with the same structure as the provided CSV
-    # Including some empty and NaN values to demonstrate handling
-    mock_data = {
-        'dataset': ['test'] * 15,
-        'id': [
-            'P3_T3.nii', 'P5_T2.nii', 'P49_T2.nii', 'P3_T1.nii', 'P35_T1.nii',
-            'P49_T1.nii', 'P15_T1.nii', 'P31_T2.nii', 'P5_T1.nii', 'P31_T1.nii',
-            'P3_T4.nii', 'P3_T2.nii', 'P7_T1.nii', 'P8_T1.nii', 'P9_T1.nii'
-        ],
-        'ref': [599] * 15,
-        'labelsTs': ['labelsTs'] * 15,
-        'Jaccard': [0.534574, 0.559676, 0.389657, 0.566943, 0.633868,
-                   0.731755, 0.604536, 0.581162, 0.218918, 0.589146,
-                   0.444399, 0.550077, np.nan, 0.612345, 0.723456],
-        'Dice': [0.696707, 0.717682, 0.560796, 0.723629, 0.775911,
-                0.845102, 0.753534, 0.735107, 0.359200, 0.741462,
-                0.615341, 0.709742, 0.680123, np.nan, 0.810234],
-        'Sensitivity': [0.590308, 0.721627, 0.402808, 0.642497, 0.702926,
-                       0.756000, 0.844957, 0.596710, 0.414024, 0.665036,
-                       0.569393, 0.680432, 0.712345, 0.653421, np.nan],
-        'Specificity': [0.999970, 0.999854, 0.999964, 0.999945, 0.999821,
-                       0.999840, 0.999904, 0.999976, 0.999502, 0.999923,
-                       0.999926, 0.999948, np.nan, 0.999876, 0.999912],
-        'PPV': [0.849894, 0.713781, 0.922691, 0.828213, 0.865808,
-              0.958014, 0.679963, 0.957090, 0.317198, 0.837735,
-              0.669355, 0.741690, 0.801234, 0.732156, np.nan],
-        'F1_score': [0.761194, 0.736196, 0.645598, 0.799154, 0.762431,
-                   0.686747, 1.000000, 0.799695, 0.534979, 0.737705,
-                   0.740741, 0.767932, np.nan, 0.720123, 0.812345]
-    }
+    Parameters:
+    -----------
+    data : dataframe
+        The data to compute metrics on
+    merged_dataset : dict, optional
+        Dictionary to extract keys from when weights is not a dict
+    case_col : str, default='id'
+        Column name for case identifiers
+    weights : dict or list, optional
+        Either a dictionary of weights or a list of weights corresponding to merged_dataset keys
+    measures : list, optional
+        List of measures to compute
+    subset_subjects : list, optional
+        List of subjects to include
+    return_average : bool, default=True
+        Whether to return average metrics
+    key_transform : callable, optional
+        Function to transform keys. Default adds '.nii' extension
 
-    # Create DataFrame
-    df = pd.DataFrame(mock_data)
+    Returns:
+    --------
+    Result of compute_weighted_metrics
+    """
+    # Determine how to get the weights dictionary
+    if isinstance(weights, dict):
+        # If weights is already a dictionary, transform its keys
+        weights_dict = {key_transform(k): v for k, v in weights.items()}
+    else:
+        # If weights is not a dictionary, we need merged_dataset
+        if merged_dataset is None:
+            raise ValueError(
+                "merged_dataset is required when weights is not a dictionary"
+            )
 
-    print("Mock DataFrame (first 5 rows):")
-    print(df.head())
-    print("\nDataFrame contains NaN values:", df.isna().any().any())
+        dict_keys = list(merged_dataset.keys())
 
-    # Example 1: Compute weighted metrics with custom weights
-    print("\nExample 1: Compute weighted metrics with custom weights")
+        # If weights is not provided, create a list of 1.0s
+        if weights is None:
+            weights = [1.0] * len(dict_keys)
+        # Otherwise, check that weights has the right length
+        elif len(weights) != len(dict_keys):
+            raise ValueError(
+                f"Length of weights ({len(weights)}) must match length of merged_dataset keys ({len(dict_keys)})"
+            )
 
-    # Now weights use the exact ID values as keys
-    weights = {
-        "P3_T3.nii": 1.5,
-        "P3_T1.nii": 1.5,
-        "P3_T4.nii": 1.5,
-        "P3_T2.nii": 1.5,
-        "P5_T2.nii": 0.8,
-        "P5_T1.nii": 0.8,
-        "P49_T2.nii": 1.2,
-        "P49_T1.nii": 1.2,
-        "P31_T2.nii": 1.0,
-        "P31_T1.nii": 1.0,
-        "P15_T1.nii": 0.7,
-        "P35_T1.nii": 0.9,
-        "P7_T1.nii": 1.1,
-        "P8_T1.nii": 0.6,
-        "P9_T1.nii": 0.5
-    }
+        # Apply the key_transform to each key from merged_dataset
+        weights_dict = {key_transform(k): weights[i] for i, k in enumerate(dict_keys)}
 
-    print("\nUnique IDs in the case column:")
-    print(df['id'].unique())
-
-    results = compute_weighted_metrics(df, case_col='id', weights=weights)
-    print("\nWeighted average metrics for all subjects:")
-    for metric, value in results.items():
-        print(f"{metric}: {value:.6f}")
-
-    # Example 2: Compute metrics for specific measures only
-    print("\nExample 2: Compute weighted metrics for specific measures only")
-    selected_measures = ['Dice', 'Jaccard', 'F1_score']
-    results = compute_weighted_metrics(df, case_col='id', weights=weights, measures=selected_measures)
-    print("\nWeighted average for selected metrics:")
-    for metric, value in results.items():
-        print(f"{metric}: {value:.6f}")
-
-    # Example 3: Compute metrics for subset of subjects
-    print("\nExample 3: Compute weighted metrics for subset of subjects")
-    # Use complete filename values for subsetting
-    subset = ["P3_T3.nii", "P3_T1.nii", "P3_T4.nii", "P3_T2.nii", "P5_T2.nii", "P5_T1.nii"]
-    results = compute_weighted_metrics(df, case_col='id', weights=weights,
-                                     subset_subjects=subset, measures=selected_measures)
-    print("\nWeighted average for P3 and P5 subjects only:")
-    for metric, value in results.items():
-        print(f"{metric}: {value:.6f}")
-
-    # Example 4: Handling completely missing data for one measure
-    print("\nExample 4: Handling missing data")
-    # Create a column with all NaN values
-    df['CompletelyMissing'] = np.nan
-    # Add some missing values to existing column
-    df.loc[0:3, 'Jaccard'] = np.nan
-
-    results = compute_weighted_metrics(df, case_col='id', weights=weights,
-                                     measures=['Jaccard', 'CompletelyMissing', 'Dice'])
-    print("\nResults with missing data:")
-    for metric, value in results.items():
-        if pd.isna(value):
-            print(f"{metric}: NaN (completely missing)")
-        else:
-            print(f"{metric}: {value:.6f}")
-
-    # Example 5: Return raw values instead of averages
-    print("\nExample 5: Return raw values instead of averages")
-    raw_values = compute_weighted_metrics(df, case_col='id', measures=['Dice', 'Jaccard'],
-                                        return_average=False)
-    print("\nRaw values (not averaged):")
-    print(raw_values)
+    return compute_weighted_metrics(
+        data,
+        case_col=case_col,
+        weights=weights_dict,
+        measures=measures,
+        subset_subjects=subset_subjects,
+        return_average=return_average,
+    )

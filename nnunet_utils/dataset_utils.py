@@ -39,8 +39,8 @@ class MergerNNUNetDataset(nnUNetDataset):
             case_identifiers (List[str]): List of case identifiers
             num_images_properties_per_case (Dict[str, List[dict]]): Properties for each case
         """
-        super().__init__(*args, **kwargs)
-        self._merged_datasets: List[nnUNetDataset] = []
+        #super().__init__(*args, **kwargs)
+        #self._merged_datasets: List[nnUNetDataset] = []
         # Add additional data to each case in the merged dataset
 
         if self.additional_data is not None:
@@ -240,7 +240,7 @@ class MergerNNUNetDataset(nnUNetDataset):
 
     def merge_and_split(self, dataset_to_merge: nnUNetDataset,
                         split_ratio: Union[Tuple[float, float], float] = 0.8,  shuffle: bool = True,
-                    seed: int = 42,
+                    seed: int = 42, split_type: Union[str, Callable] = 'random',
                         **merge_kwargs):
 
         """
@@ -248,6 +248,7 @@ class MergerNNUNetDataset(nnUNetDataset):
         1. Splitting each folder into train/val
         2. Merging the train portions and val portions separately
         Important: Even not checking for conflics when the dict updates with the new dataset just unique keys will be kept.
+        if split_type is 'random' the split is random, if split_type is 'stratified' the split is stratified by the groupby_func introduced as callable as in stratified_split
 
         returns:  Tuple[MergerNNUNetDataset, MergerNNUNetDataset]
         """
@@ -255,13 +256,16 @@ class MergerNNUNetDataset(nnUNetDataset):
         # Split each dataset
         if isinstance(split_ratio, float):
             split_ratio = (split_ratio, split_ratio)
+        if split_type == 'random':
+            train_train, train_val = self.random_split(split_ratio=split_ratio[0],  shuffle=shuffle, seed=seed)
+            test_train, test_val = dataset_to_merge.random_split(split_ratio=split_ratio[1],  shuffle=shuffle, seed=seed)
+            train_train.merge(test_train,**merge_kwargs)
+            train_val.merge(test_val,**merge_kwargs)
+        else:
+            self.merge(dataset_to_merge,**merge_kwargs)
+            train_train, train_val = self.stratified_split(split_ratio=split_ratio[0], groupby_func=split_type, seed=seed)
 
-        train_train, train_val = self.random_split(split_ratio=split_ratio[0],  shuffle=shuffle, seed=seed)
-        test_train, test_val = dataset_to_merge.random_split(split_ratio=split_ratio[1],  shuffle=shuffle, seed=seed)
 
-        # Merge training sets
-        train_train.merge(test_train,**merge_kwargs)
-        train_val.merge(test_val,**merge_kwargs)
 
         return train_train, train_val
 

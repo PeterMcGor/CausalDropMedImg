@@ -17,6 +17,8 @@ from dowhy.gcm.shapley import ShapleyConfig
 from dowhy import gcm
 
 
+# ImagesTr&LabelsTr vs imagesTs&LabelsTs: Test in portion of imagesTs&LabelsTs
+# all same centers. Real case
 def main(args):
     # Common configuration
     training_config = TrainingConfig(
@@ -29,7 +31,7 @@ def main(args):
         verbosity=1,
         log_path=None,
         save_path=None,
-         exp_name=f"Exp_Dataset00x_Annotator{args.train_annotator}_vs_Annotator{args.test_annotator}"
+        exp_name=f"Exp2_Annotator{args.train_annotator}_vs_Annotator{args.test_annotator}"
     )
 
     def center_number_groupby(key):
@@ -64,23 +66,23 @@ def main(args):
     )
 
     # Training data for the discriminator from nnunet training data with specified annotator
-    #train_nnunet_path = discriminator.preprocess_custom_folder(
-    #    input_images_folder=f'{nnunet_folders_path}/nnUNet_raw/{nnunet_dataset}/imagesTr',
-    #    input_segs_folder=f'{nnunet_folders_path}/nnUNet_raw/{nnunet_dataset}/labelsTr',
-    #    folder_name='train_data'
-    # )
-    train_nnunet_path = "/tmp/tmpd2jyw36g/train_data"
+    train_nnunet_path = discriminator.preprocess_custom_folder(
+        input_images_folder=f'{nnunet_folders_path}/nnUNet_raw/{nnunet_dataset}/imagesTr',
+        input_segs_folder=f'{nnunet_folders_path}/nnUNet_raw/{nnunet_dataset}/labelsTr',
+        folder_name='train_data'
+     )
+    #train_nnunet_path = "/tmp/tmp4owrcfo4/train_data"
     training_nnunet_dataset = discriminator.create_dataset_from_folder(
         train_nnunet_path, is_test_data=False
     )
 
     # Same domain since it's label from the same annotator
-    #test_nnunet = discriminator.preprocess_custom_folder(
-    #    input_images_folder=f'{nnunet_folders_path}/nnUNet_raw/{nnunet_dataset}/imagesTs',
-    #    input_segs_folder=f'{nnunet_folders_path}/nnUNet_raw/{nnunet_dataset}/labelsTs_{args.train_annotator}',
-    #    folder_name='train_transport'
-    # )
-    test_nnunet = "/tmp/tmpsm56pkq2/train_transport"
+    test_nnunet = discriminator.preprocess_custom_folder(
+        input_images_folder=f'{nnunet_folders_path}/nnUNet_raw/{nnunet_dataset}/imagesTs',
+        input_segs_folder=f'{nnunet_folders_path}/nnUNet_raw/{nnunet_dataset}/labelsTs_{args.train_annotator}',
+        folder_name='train_transport'
+     )
+    #test_nnunet = "/tmp/tmpd084h9y5/train_transport"
     # here test:data mean different domain. Since here we supousse training domain Center=[1,7,8] and annotator=1. Same domain
     test_nnunet_dataset = discriminator.create_dataset_from_folder(
         test_nnunet, is_test_data=False
@@ -95,12 +97,12 @@ def main(args):
     )
 
     # Now the out-of-domain dataset with a different annotator
-    #test_path = discriminator.preprocess_custom_folder(
-    #    input_images_folder=f'{nnunet_folders_path}/nnUNet_raw/{nnunet_dataset}/imagesTs',#
-    #    input_segs_folder=f'{nnunet_folders_path}/nnUNet_raw/{nnunet_dataset}/labelsTs_{args.test_annotator}', 
-    #    folder_name='test'
-    # )
-    test_path = "/tmp/tmp1w8glsp7/test"
+    test_path = discriminator.preprocess_custom_folder(
+        input_images_folder=f'{nnunet_folders_path}/nnUNet_raw/{nnunet_dataset}/imagesTs',#
+        input_segs_folder=f'{nnunet_folders_path}/nnUNet_raw/{nnunet_dataset}/labelsTs_{args.test_annotator}',
+        folder_name='test'
+    )
+    #test_path = "/tmp/tmpjkj6fye6/test"
 
     out_of_dataset = discriminator.create_dataset_from_folder(
         test_path, is_test_data=True,
@@ -112,13 +114,15 @@ def main(args):
         out_of_domain_with_same_images.stratified_split(0.7)
     )
 
+    just_in_train_for_infer = just_in_train_centers_dataset_unseen_for_transport.subset(test_data_for_infer.keys())
+
     train_data, val_data = training_nnunet_dataset.merge_and_split(
         test_data_for_disc, split_ratio=0.8, split_type=None,check_conflicting_cases = True #True always for original experiment
     )
     discriminator.set_datasets(
         train_data=train_data,
         val_data=val_data,
-        test_dataset_train_domain=just_in_train_centers_dataset_unseen_for_transport,
+        test_dataset_train_domain=test_data_for_infer,
         test_dataset_inference_domain=test_data_for_infer,
     )
 
@@ -159,7 +163,7 @@ def main(args):
     ]
     train_env_perf_f1 = compute_weighted_metrics_merged_dataset(
         data_csv_train_labels,
-        just_in_train_centers_dataset_unseen_for_transport,
+        test_data_for_infer,
         measures=["F1_score"],
     )
     inference_env_perf_f1 = compute_weighted_metrics_merged_dataset(
@@ -167,7 +171,7 @@ def main(args):
     )
 
     train_env_perf_dice = compute_weighted_metrics_merged_dataset(
-        data_csv_train_labels, just_in_train_centers_dataset_unseen_for_transport, measures=["Dice"]
+        data_csv_train_labels, test_data_for_infer, measures=["Dice"]
     )
     inference_env_perf_dice = compute_weighted_metrics_merged_dataset(
         data_csv_test_labels, test_data_for_infer, measures=["Dice"]
@@ -179,7 +183,7 @@ def main(args):
 
     # Analyze shifts for F1 score
     attributions_f1 = analyzer.analyze_shift(
-        just_in_train_centers_dataset_unseen_for_transport,
+        just_in_train_for_infer,
         test_data_for_infer,
         data_csv_train_labels,
         measure=MetricConfig('F1_score', MetricGoal.MAXIMIZE),
@@ -192,7 +196,7 @@ def main(args):
 
     # Analyze shifts for Dice
     attributions_dice = analyzer.analyze_shift(
-        just_in_train_centers_dataset_unseen_for_transport,
+        just_in_train_for_infer,
         test_data_for_infer,
         data_csv_train_labels,
         measure=MetricConfig('Dice', MetricGoal.MAXIMIZE),
@@ -242,7 +246,7 @@ def main(args):
     pivot_df["test_annotator"] = args.test_annotator
 
     # Generate output filenames with annotator info
-    output_base = f"annotator{args.train_annotator}_vs_annotator{args.test_annotator}"
+    output_base = f"Exp_2_annotator{args.train_annotator}_vs_annotator{args.test_annotator}"
     combined_output = os.path.join(
         result_folder, f"{output_base}_combined_attributions.csv"
     )

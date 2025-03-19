@@ -180,7 +180,7 @@ class DiscriminatorRatioEstimator(DensityRatioEstimator):
                 mech_ratios = self._estimate_mechanism_ratio(
                     aux_to_transport_data,
                     mechanism,
-                    root_node_prior_coef=train_env_data_shift_samples / len(inference_env_data),
+                    root_node_prior_coef= train_env_data_shift_samples / len(inference_env_data),
                 )
                 # Update cumulative ratios at permutation
                 for case_id, data in aux_to_transport_data.items():

@@ -24,7 +24,7 @@ spec:
   scale: 1
   use_spot_instance: false
   schedule: null
-  token_scope: workspace:{{self}}:dask:write
+  #token_scope: workspace:{{self}}:dask:write
   git_repositories:
     - url: git@github.com:PeterMcGor/CausalDropMedImg.git
       path: /home/jovyan/workspace/CausalDropMedImg

@@ -17,6 +17,8 @@ from dowhy.gcm.shapley import ShapleyConfig
 from dowhy import gcm
 
 
+# ImagesTr&LabelsTr vs imagesTs&LabelsTs: Test in portion of imagesTs&LabelsTs
+# all same centers. Real case
 def main(args):
     # Common configuration
     training_config = TrainingConfig(
@@ -29,7 +31,7 @@ def main(args):
         verbosity=1,
         log_path=None,
         save_path=None,
-        exp_name=f"Exp3_Annotator{args.train_annotator}_vs_Annotator{args.train_annotator}",
+        exp_name=f"Exp_reduced_Annotator{args.train_annotator}_vs_Annotator{args.test_annotator}"
     )
 
     def center_number_groupby(key):
@@ -68,45 +70,60 @@ def main(args):
         input_images_folder=f'{nnunet_folders_path}/nnUNet_raw/{nnunet_dataset}/imagesTr',
         input_segs_folder=f'{nnunet_folders_path}/nnUNet_raw/{nnunet_dataset}/labelsTr',
         folder_name='train_data'
-    )
-    #train_nnunet_path = "/tmp/tmpcl9xw52y/train_data"
+     )
+    #train_nnunet_path = "/tmp/tmp4owrcfo4/train_data"
     training_nnunet_dataset = discriminator.create_dataset_from_folder(
         train_nnunet_path, is_test_data=False
     )
-    training_nnunet_for_disc, training_nnunet_for_infer = (
-        training_nnunet_dataset.stratified_split(0.8)
+
+    # Same domain since it's label from the same annotator
+    test_nnunet = discriminator.preprocess_custom_folder(
+        input_images_folder=f'{nnunet_folders_path}/nnUNet_raw/{nnunet_dataset}/imagesTs',
+        input_segs_folder=f'{nnunet_folders_path}/nnUNet_raw/{nnunet_dataset}/labelsTs_{args.train_annotator}',
+        folder_name='train_transport'
+     )
+    #test_nnunet = "/tmp/tmpd084h9y5/train_transport"
+    # here test:data mean different domain. Since here we supousse training domain Center=[1,7,8] and annotator=1. Same domain
+    test_nnunet_dataset = discriminator.create_dataset_from_folder(
+        test_nnunet, is_test_data=False
     )
 
     def exclude_center_pattern(case_id: str) -> bool:
         return "Center_03" not in case_id
 
+    # center 03 not in the source, want just label effect here. Workaround to just keep subject in domain
+    just_in_train_centers_dataset_unseen_for_transport = (
+        test_nnunet_dataset.subset_by_pattern(exclude_center_pattern)
+    )
+
+    # Now the out-of-domain dataset with a different annotator
     test_path = discriminator.preprocess_custom_folder(
         input_images_folder=f'{nnunet_folders_path}/nnUNet_raw/{nnunet_dataset}/imagesTs',#
-        input_segs_folder=f'{nnunet_folders_path}/nnUNet_raw/{nnunet_dataset}/labelsTs_{args.train_annotator}', # same annotator that in traininig
+        input_segs_folder=f'{nnunet_folders_path}/nnUNet_raw/{nnunet_dataset}/labelsTs_{movidas}',
         folder_name='test'
     )
-    #test_path = "/tmp/tmpqyt3qjtk/test"
+    #test_path = "/tmp/tmpjkj6fye6/test"
 
     out_of_dataset = discriminator.create_dataset_from_folder(
         test_path, is_test_data=True,
     )
-    #out_of_dataset.transform_keys(lambda k: 'workaround_'+k)
     out_of_domain_with_same_images = out_of_dataset.subset_by_pattern(
         exclude_center_pattern
     )
     test_data_for_disc, test_data_for_infer = (
-        out_of_domain_with_same_images.stratified_split(0.5)
-   )
+        out_of_domain_with_same_images.stratified_split(0.7)
+    )
 
+    just_in_train_for_infer = just_in_train_centers_dataset_unseen_for_transport.subset(test_data_for_infer.keys())
 
-    train_data, val_data = training_nnunet_for_disc.merge_and_split(
+    train_data, val_data = training_nnunet_dataset.merge_and_split(
         test_data_for_disc, split_ratio=0.8, split_type=None,check_conflicting_cases = True #True always for original experiment
     )
     discriminator.set_datasets(
         train_data=train_data,
         val_data=val_data,
-        test_dataset_train_domain=training_nnunet_for_infer,
-        test_dataset_inference_domain=test_data_for_infer
+        test_dataset_train_domain=test_data_for_infer,
+        test_dataset_inference_domain=test_data_for_infer,
     )
 
     # Create analyzer
@@ -134,19 +151,19 @@ def main(args):
     )
 
     # Compute metrics using original model
-    data_csv = f"{nnunet_folders_path}/nnUNet_raw/{nnunet_dataset}/{nnunet_dataset}_label_comparisons.csv"
+    data_csv = f"{nnunet_folders_path}/nnUNet_raw/{nnunet_dataset}/{nnunet_dataset} _anima_measures.csv"
     data_csv = pd.read_csv(data_csv)
     data_csv_train_labels = data_csv[
         (data_csv["annotator"] == args.train_annotator)
-        & (data_csv["reference"] == "labelsTr")
+        & (data_csv["ref"] == "labelsTs_" + str(args.train_annotator))
     ]
     data_csv_test_labels = data_csv[
         (data_csv["annotator"] == args.train_annotator)
-        & (data_csv["reference"] == "labelsTs_" + str(args.train_annotator))
+        & (data_csv["ref"] == "labelsTs_" + str(args.test_annotator))
     ]
     train_env_perf_f1 = compute_weighted_metrics_merged_dataset(
         data_csv_train_labels,
-        training_nnunet_dataset,
+        test_data_for_infer,
         measures=["F1_score"],
     )
     inference_env_perf_f1 = compute_weighted_metrics_merged_dataset(
@@ -154,7 +171,7 @@ def main(args):
     )
 
     train_env_perf_dice = compute_weighted_metrics_merged_dataset(
-        data_csv_train_labels, training_nnunet_dataset, measures=["Dice"]
+        data_csv_train_labels, test_data_for_infer, measures=["Dice"]
     )
     inference_env_perf_dice = compute_weighted_metrics_merged_dataset(
         data_csv_test_labels, test_data_for_infer, measures=["Dice"]
@@ -166,7 +183,7 @@ def main(args):
 
     # Analyze shifts for F1 score
     attributions_f1 = analyzer.analyze_shift(
-        training_nnunet_for_infer,
+        just_in_train_for_infer,
         test_data_for_infer,
         data_csv_train_labels,
         measure=MetricConfig('F1_score', MetricGoal.MAXIMIZE),
@@ -179,7 +196,7 @@ def main(args):
 
     # Analyze shifts for Dice
     attributions_dice = analyzer.analyze_shift(
-        training_nnunet_for_infer,
+        just_in_train_for_infer,
         test_data_for_infer,
         data_csv_train_labels,
         measure=MetricConfig('Dice', MetricGoal.MAXIMIZE),
@@ -197,7 +214,7 @@ def main(args):
     df_f1["initial_inference_perf"] = inference_env_perf_f1
     df_f1["performance_difference"] = f1_diff
     df_f1["train_annotator"] = args.train_annotator
-    df_f1["test_annotator"] = args.train_annotator
+    df_f1["test_annotator"] = args.test_annotator
 
     df_dice = pd.DataFrame(attributions_dice.items(), columns=["mechanism", "value"])
     df_dice["metric"] = "Dice"
@@ -205,7 +222,7 @@ def main(args):
     df_dice["initial_inference_perf"] = inference_env_perf_dice
     df_dice["performance_difference"] = dice_diff
     df_dice["train_annotator"] = args.train_annotator
-    df_dice["test_annotator"] = args.train_annotator
+    df_dice["test_annotator"] = args.test_annotator
 
     # Combine the DataFrames
     combined_df = pd.concat([df_f1, df_dice], ignore_index=True)
@@ -229,7 +246,7 @@ def main(args):
     pivot_df["test_annotator"] = args.test_annotator
 
     # Generate output filenames with annotator info
-    output_base = f"Exp_3_annotator{args.train_annotator}_vs_annotator{args.train_annotator}"
+    output_base = f"Exp_reduced_annotator{args.train_annotator}_vs_annotator{args.test_annotator}"
     combined_output = os.path.join(
         result_folder, f"{output_base}_combined_attributions.csv"
     )

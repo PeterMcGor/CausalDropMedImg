@@ -536,10 +536,10 @@ class FlexibleNNunetBinaryDiscriminatorRatioEstimator(DiscriminatorRatioEstimato
         """
         # Check if we have training and validation data
         #if register_key == 'images':
-        #    self.fitted_models[register_key] = "/home/jovyan/nnunet_data/Dataset001_MSSEG_FLAIR_Annotator1/results/models/Exp_Dataset00x_Annotator1_vs_Annotator3_AdamW_lr_5e-05_images_Dataset001_MSSEG_FLAIR_Annotator1_20250318_212437/best_model.pth" # f1 trained
+        #    self.fitted_models[register_key] = "/home/jovyan/nnunet_data/Dataset001_MSSEG_FLAIR_Annotator1/results/models/Exp3_Annotator1_vs_Annotator1_AdamW_lr_5e-05_images_Dataset001_MSSEG_FLAIR_Annotator1_20250319_212945/best_model.pth" # f1 trained
         #    return
         #if register_key == 'images_labels':
-        #    self.fitted_models[register_key] = "/home/jovyan/nnunet_data/Dataset001_MSSEG_FLAIR_Annotator1/results/models/Exp_Dataset00x_Annotator1_vs_Annotator3_AdamW_lr_5e-05_images_labels_Dataset001_MSSEG_FLAIR_Annotator1_20250318_215024/best_model.pth" #
+        #    self.fitted_models[register_key] = "/home/jovyan/nnunet_data/Dataset001_MSSEG_FLAIR_Annotator1/results/models/Exp3_Annotator1_vs_Annotator1_AdamW_lr_5e-05_images_labels_Dataset001_MSSEG_FLAIR_Annotator1_20250319_213256/best_model.pth" #
         #    return
 
         if self.train_data is None or self.val_data is None:

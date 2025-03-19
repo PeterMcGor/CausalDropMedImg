@@ -1,7 +1,7 @@
 schema_version: 2024.04.01
 type: job
 spec:
-  name: causal-shift-train2-test1
+  name: causal-shift-train2-test1_exp1
   owner: dgm-ms-brain-mri/pedro-maciasgordaliza
   description: 'Causal mechanism shift analysis from annotator 2 to annotator 1'
   image: dgm-ms-brain-mri/pedro-maciasgordaliza/seg_model_attr:0.0.4

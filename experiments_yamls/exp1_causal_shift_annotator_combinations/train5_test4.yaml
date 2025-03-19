@@ -1,0 +1,32 @@
+schema_version: 2024.04.01
+type: job
+spec:
+  name: causal-shift-train5-test4
+  owner: dgm-ms-brain-mri/pedro-maciasgordaliza
+  description: 'Causal mechanism shift analysis from annotator 5 to annotator 4'
+  image: dgm-ms-brain-mri/pedro-maciasgordaliza/seg_model_attr:0.0.4
+  instance_type: 1xA100
+  environment_variables:
+    TRAIN_ANNOTATOR: "5"
+    TEST_ANNOTATOR: "4"
+    NNUNET_FOLDERS_PATH: "/home/jovyan/shared/pedro-maciasgordaliza/ms-data/nnunet_folders"
+    NUM_EPOCHS: "200"
+    DEVICE: "cuda"
+    N_JOBS: "1"
+    SHAPLEY_SAMPLES: "500"
+  working_directory: /home/jovyan/workspace/CausalDropMedImg
+  command: 'bash -c "git pull origin main && python -m attributions.examples.medical_image_call_exp1 --train_annotator 5 --test_annotator 4 --nnunet_folders_path $NNUNET_FOLDERS_PATH --num_epochs $NUM_EPOCHS --device $DEVICE --n_jobs $N_JOBS --shapley_samples $SHAPLEY_SAMPLES --num_train_iterations_per_epoch 50 --num_val_iterations_per_epoch 50"'
+  scale: 1
+  use_spot_instance: false
+  schedule: null
+  #token_scope: workspace:{self}:dask:write
+  git_repositories:
+    - url: git@github.com:PeterMcGor/CausalDropMedImg.git
+      path: /home/jovyan/workspace/CausalDropMedImg
+      public: false
+      on_restart: preserve changes
+      reference_type: branch
+  shared_folders:
+    - owner: dgm-ms-brain-mri/pedro-maciasgordaliza
+      path: /home/jovyan/shared/pedro-maciasgordaliza/ms-data
+      name: ms-data

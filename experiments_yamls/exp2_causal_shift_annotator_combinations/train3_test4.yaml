@@ -15,7 +15,7 @@ spec:
     N_JOBS: "1"
     SHAPLEY_SAMPLES: "500"
   working_directory: /home/jovyan/workspace/CausalDropMedImg
-  command: 'git pull origin main && python -m attributions.examples.medical_image_just_unseen --train_annotator 3 --test_annotator 4 --nnunet_folders_path $NNUNET_FOLDERS_PATH --num_epochs $NUM_EPOCHS --device $DEVICE --n_jobs $N_JOBS --shapley_samples $SHAPLEY_SAMPLES --num_train_iterations_per_epoch 50 --num_val_iterations_per_epoch 50'
+  command: 'bash -c "git pull origin main && python -m attributions.examples.medical_image_just_unseen --train_annotator 3 --test_annotator 4 --nnunet_folders_path $NNUNET_FOLDERS_PATH --num_epochs $NUM_EPOCHS --device $DEVICE --n_jobs $N_JOBS --shapley_samples $SHAPLEY_SAMPLES --num_train_iterations_per_epoch 50 --num_val_iterations_per_epoch 50"'
   scale: 1
   use_spot_instance: false
   schedule: null
